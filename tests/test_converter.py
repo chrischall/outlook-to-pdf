@@ -341,29 +341,26 @@ def test_url_fetcher_resolves_cid_even_with_network_blocked():
 
 
 def test_url_fetcher_blocked_url_does_not_hit_network(monkeypatch):
-    # default_url_fetcher would do real I/O — make sure we never reach it
-    import weasyprint
-    called = []
+    # The underlying URLFetcher would do real I/O — make sure we never reach it
+    from weasyprint.urls import URLFetcher
 
-    def boom(*a, **kw):
-        called.append((a, kw))
-        raise AssertionError("default_url_fetcher should not be called for a blocked URL")
+    def boom(self, *a, **kw):
+        raise AssertionError("URLFetcher.fetch should not be called for a blocked URL")
 
-    monkeypatch.setattr(weasyprint, "default_url_fetcher", boom)
+    monkeypatch.setattr(URLFetcher, "fetch", boom)
     fetch = _make_url_fetcher({}, allow_network=False)
     fetch("http://tracker.example/pixel.png")
-    assert called == []
 
 
 def test_url_fetcher_blocks_file_scheme_by_default(monkeypatch):
     """A malicious .msg could try <img src="file:///etc/passwd"> to probe
-    local files. The default fetcher must NOT read them."""
-    import weasyprint
+    local files. The fetcher must NOT read them."""
+    from weasyprint.urls import URLFetcher
 
-    def boom(*a, **kw):
-        raise AssertionError("default_url_fetcher should not be called for file://")
+    def boom(self, *a, **kw):
+        raise AssertionError("URLFetcher.fetch should not be called for file://")
 
-    monkeypatch.setattr(weasyprint, "default_url_fetcher", boom)
+    monkeypatch.setattr(URLFetcher, "fetch", boom)
     fetch = _make_url_fetcher({}, allow_network=False)
     resp = fetch("file:///etc/passwd")
     assert resp.read().startswith(b"\x89PNG\r\n\x1a\n")
@@ -388,21 +385,16 @@ def test_url_fetcher_allows_data_urls_by_default():
 
 
 def test_url_fetcher_allow_network_passes_through(monkeypatch):
-    """When the user opts in with --allow-network, http URLs reach the default fetcher."""
-    from weasyprint.urls import URLFetcherResponse
-    import outlook_to_pdf.converter as c
+    """When the user opts in with --allow-network, http URLs reach the URLFetcher."""
+    from weasyprint.urls import URLFetcher, URLFetcherResponse
 
     captured: list[str] = []
 
-    def fake(url, **kw):
+    def fake(self, url, headers=None):
         captured.append(url)
         return URLFetcherResponse(url, body=b"\x89PNG\r\n\x1a\nFAKE", headers={"Content-Type": "image/png"})
 
-    monkeypatch.setattr(c, "_make_url_fetcher", c._make_url_fetcher)  # ensure not patched elsewhere
-    # Patch default_url_fetcher in weasyprint itself
-    import weasyprint
-    monkeypatch.setattr(weasyprint, "default_url_fetcher", fake)
-
+    monkeypatch.setattr(URLFetcher, "fetch", fake)
     fetch = _make_url_fetcher({}, allow_network=True)
     fetch("https://example.com/img.png")
     assert captured == ["https://example.com/img.png"]

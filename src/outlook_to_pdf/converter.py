@@ -265,8 +265,9 @@ def _make_url_fetcher(
     (local-file leak), or relative paths that resolve under ``base_url`` to
     something on disk. We never want to read those during render.
     """
-    from weasyprint import default_url_fetcher
-    from weasyprint.urls import URLFetcherResponse
+    from weasyprint.urls import URLFetcher, URLFetcherResponse
+
+    passthrough = URLFetcher()
 
     def _blank_png_response(url: str) -> "URLFetcherResponse":
         return URLFetcherResponse(url, body=_BLANK_PNG, headers={"Content-Type": "image/png"})
@@ -286,11 +287,8 @@ def _make_url_fetcher(
             data, mime, _name = entry
             return URLFetcherResponse(url, body=data, headers={"Content-Type": mime or "application/octet-stream"})
 
-        if url.startswith("data:"):
-            return default_url_fetcher(url, timeout=timeout, ssl_context=ssl_context)
-
-        if allow_network:
-            return default_url_fetcher(url, timeout=timeout, ssl_context=ssl_context)
+        if url.startswith("data:") or allow_network:
+            return passthrough.fetch(url)
 
         return _blank_png_response(url)
 

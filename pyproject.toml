@@ -24,3 +24,9 @@ dev = [
     "pypdf>=6.11.0",
     "pytest>=9.0.3",
 ]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "error::DeprecationWarning",
+    "error::PendingDeprecationWarning",
+]
