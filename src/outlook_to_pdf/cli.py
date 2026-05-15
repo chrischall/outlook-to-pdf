@@ -8,25 +8,57 @@ import click
 from .converter import convert_msg_to_pdf
 
 
+def _expand_inputs(inputs: tuple[Path, ...], recursive: bool) -> list[Path]:
+    """Resolve each input to a list of .msg files.
+
+    - A file is kept as-is (whatever its extension — caller asked for it).
+    - A directory is scanned for *.msg children (recursively if requested).
+    - Results are de-duplicated while preserving order.
+    """
+    pattern = "**/*.msg" if recursive else "*.msg"
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for p in inputs:
+        if p.is_dir():
+            for child in sorted(p.glob(pattern)):
+                if child.is_file():
+                    rp = child.resolve()
+                    if rp not in seen:
+                        seen.add(rp)
+                        out.append(child)
+        else:
+            rp = p.resolve()
+            if rp not in seen:
+                seen.add(rp)
+                out.append(p)
+    return out
+
+
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument(
     "inputs",
     nargs=-1,
     required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    type=click.Path(exists=True, path_type=Path),
 )
 @click.option(
     "-o",
     "--output",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
-    help="Output PDF path. Only valid with a single input. Defaults to <input>.pdf.",
+    help="Output PDF path. Only valid with a single resolved input. Defaults to <input>.pdf.",
 )
 @click.option(
     "--output-dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
     help="Write PDFs into this directory instead of next to each input.",
+)
+@click.option(
+    "-r",
+    "--recursive",
+    is_flag=True,
+    help="When an input is a directory, recurse into subdirectories looking for .msg files.",
 )
 @click.option(
     "--embed-attachments/--no-embed-attachments",
@@ -43,16 +75,28 @@ def cli(
     inputs: tuple[Path, ...],
     output: Path | None,
     output_dir: Path | None,
+    recursive: bool,
     embed_attachments: bool,
     extract_attachments: bool,
     quiet: bool,
 ) -> None:
-    """Convert Outlook .msg files to PDF."""
-    if output is not None and len(inputs) > 1:
+    """Convert Outlook .msg files to PDF.
+
+    INPUTS may be individual .msg files, directories containing .msg files,
+    or shell globs (which the shell expands before invocation).
+    """
+    resolved = _expand_inputs(inputs, recursive=recursive)
+    if not resolved:
+        raise click.UsageError(
+            "no .msg files found in the given inputs"
+            + (" (try -r to recurse into subdirectories)" if not recursive else "")
+        )
+
+    if output is not None and len(resolved) > 1:
         raise click.UsageError("-o/--output cannot be used with multiple inputs; use --output-dir.")
 
     failures = 0
-    for src in inputs:
+    for src in resolved:
         if output is not None:
             dest = output
         elif output_dir is not None:

@@ -61,8 +61,17 @@ uv run outlook-to-pdf email.msg
 # Custom output path
 uv run outlook-to-pdf email.msg -o /tmp/output.pdf
 
-# Batch into a target directory
+# Multiple files via shell glob (shell expands *.msg before invocation)
 uv run outlook-to-pdf inbox/*.msg --output-dir ./pdfs
+
+# A whole directory of .msg files (non-recursive)
+uv run outlook-to-pdf ./inbox --output-dir ./pdfs
+
+# Recurse into subdirectories
+uv run outlook-to-pdf -r ./archive --output-dir ./pdfs
+
+# Mix and match — file, directory, glob — all in one invocation
+uv run outlook-to-pdf urgent.msg ./inbox -r ./old-archives
 
 # Also write attachments to a sidecar folder (in addition to embedding)
 uv run outlook-to-pdf email.msg --extract-attachments
@@ -70,6 +79,16 @@ uv run outlook-to-pdf email.msg --extract-attachments
 # Skip embedding attachments (just list them by name)
 uv run outlook-to-pdf email.msg --no-embed-attachments
 ```
+
+### Input expansion
+
+| Input form | What happens |
+| --- | --- |
+| `foo.msg` | Converted as-is |
+| `*.msg` | Shell expands the glob first; each match is converted |
+| `inbox/` (directory) | Scans for `*.msg` children (non-recursive by default) |
+| `inbox/ -r` | Walks the directory tree, picks up every `.msg` it finds |
+| Duplicates (e.g. `inbox/ inbox/a.msg`) | De-duplicated by resolved path; each file converted once |
 
 Run `uv run outlook-to-pdf --help` for the full option list.
 
