@@ -12,9 +12,13 @@ and [`WeasyPrint`](https://weasyprint.org) (renders the email's HTML body to PDF
 
 - Parses Outlook `.msg` files cross-platform — no Outlook, no Windows required
 - Preserves the original HTML body when present, falls back to the plain-text body
+- Resolves inline `cid:` image references so embedded images actually appear
 - Embeds attachments inside the PDF (extractable from Preview, Acrobat, Foxit, Firefox, …)
+- **Blocks network fetches by default** so tracking pixels in the email body
+  can't phone home; pass `--allow-network` if you really need remote assets
+- Sanitizes attachment filenames before writing to disk (no path traversal)
 - Optional sidecar folder for attachments
-- Batch-converts multiple files in one invocation
+- Batch-converts multiple files in one invocation (files, directories, `-r`)
 
 ## Requirements
 
@@ -78,6 +82,9 @@ uv run outlook-to-pdf email.msg --extract-attachments
 
 # Skip embedding attachments (just list them by name)
 uv run outlook-to-pdf email.msg --no-embed-attachments
+
+# Allow the renderer to fetch remote images/CSS (off by default for privacy)
+uv run outlook-to-pdf email.msg --allow-network
 ```
 
 ### Input expansion

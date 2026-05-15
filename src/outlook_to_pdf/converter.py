@@ -48,15 +48,20 @@ class _MessageLike(Protocol):
 
 @dataclass
 class ParsedEmail:
-    subject: str
-    sender: str | None
-    to: str | None
-    cc: str | None
-    bcc: str | None
-    date_display: str | None
-    text_body: str
-    html_body: str | None
+    subject: str = "(no subject)"
+    sender: str | None = None
+    to: str | None = None
+    cc: str | None = None
+    bcc: str | None = None
+    date_display: str | None = None
+    text_body: str = ""
+    html_body: str | None = None
+    # Visible attachment names (excludes purely inline images).
     attachments: list[str] = field(default_factory=list)
+    # (name, bytes) for each visible attachment that has data.
+    embedded_files: list[tuple[str, bytes]] = field(default_factory=list)
+    # CID -> (bytes, mime, original_name) for inline-image resolution + sidecar.
+    inline_resources: dict[str, tuple[bytes, str, str]] = field(default_factory=dict)
     attachments_embedded: bool = False
 
 
@@ -95,26 +100,58 @@ def _attachment_name(att: object) -> str:
     return "attachment.bin"
 
 
+def _normalize_cid(value: object) -> str | None:
+    s = _coerce_str(value)
+    if not s:
+        return None
+    return s.strip("<>").strip() or None
+
+
 def parse_message(msg: _MessageLike) -> ParsedEmail:
-    subject = _coerce_str(msg.subject) or "(no subject)"
+    """Read a Message-like object into a ParsedEmail.
 
-    html_body_raw = msg.htmlBody
-    html_body = _coerce_str(html_body_raw) if html_body_raw else None
+    Walks the attachment list exactly once, populating:
+      - ``attachments`` — visible names (purely inline images are filtered out)
+      - ``embedded_files`` — (name, bytes) for PDF /EmbeddedFiles
+      - ``inline_resources`` — CID -> (bytes, mime, name) for cid: URL resolution
+    """
+    html_body = _coerce_str(msg.htmlBody) if msg.htmlBody else None
+    haystack = html_body or ""
 
-    text_body = _coerce_str(msg.body) or ""
+    attachments: list[str] = []
+    embedded: list[tuple[str, bytes]] = []
+    inline: dict[str, tuple[bytes, str, str]] = {}
 
-    attachments = [_attachment_name(a) for a in (msg.attachments or [])]
+    for att in (msg.attachments or []):
+        name = _attachment_name(att)
+        cid = _normalize_cid(getattr(att, "cid", None) or getattr(att, "contentId", None))
+        mime = _coerce_str(getattr(att, "mimetype", None)) or "application/octet-stream"
+        raw_data = getattr(att, "data", None)
+        raw = bytes(raw_data) if isinstance(raw_data, (bytes, bytearray, memoryview)) else None
+
+        if cid and raw is not None:
+            inline[cid] = (raw, mime, name)
+
+        # Purely inline images live in inline_resources only — no double-listing.
+        if cid and f"cid:{cid}" in haystack:
+            continue
+
+        attachments.append(name)
+        if raw is not None:
+            embedded.append((name, raw))
 
     return ParsedEmail(
-        subject=subject,
+        subject=_coerce_str(msg.subject) or "(no subject)",
         sender=_coerce_str(msg.sender),
         to=_coerce_str(msg.to),
         cc=_coerce_str(msg.cc),
         bcc=_coerce_str(msg.bcc),
         date_display=_format_date(msg.date),
-        text_body=text_body,
+        text_body=_coerce_str(msg.body) or "",
         html_body=html_body,
         attachments=attachments,
+        embedded_files=embedded,
+        inline_resources=inline,
     )
 
 
@@ -129,8 +166,7 @@ def _extract_body_inner(html: str) -> str:
 def _text_to_html(text: str) -> str:
     if not text:
         return ""
-    escaped = escape(text)
-    return escaped.replace("\r\n", "<br>\n").replace("\n", "<br>\n").replace("\r", "<br>\n")
+    return escape(text).replace("\r\n", "<br>\n").replace("\n", "<br>\n").replace("\r", "<br>\n")
 
 
 _HEADER_CSS = """
@@ -203,34 +239,8 @@ def render_html(parsed: ParsedEmail) -> str:
     )
 
 
-def _make_cid_fetcher(cid_map: dict[str, tuple[bytes, str]]):
-    """Build a WeasyPrint url_fetcher that resolves `cid:` URLs from a map.
-
-    Falls back to WeasyPrint's default fetcher for any other URL scheme.
-    """
-    from weasyprint import default_url_fetcher
-    from weasyprint.urls import URLFetcherResponse
-
-    def fetch(url: str, timeout: int = 10, ssl_context=None):
-        if url.startswith("cid:"):
-            cid = url[4:].strip("<>").strip()
-            entry = cid_map.get(cid)
-            if entry is None:
-                for k, v in cid_map.items():
-                    if k.lower() == cid.lower():
-                        entry = v
-                        break
-            if entry is None:
-                data, mime = _BLANK_PNG, "image/png"
-            else:
-                data, mime = entry
-                mime = mime or "application/octet-stream"
-            return URLFetcherResponse(url, body=data, headers={"Content-Type": mime})
-        return default_url_fetcher(url, timeout=timeout, ssl_context=ssl_context)
-
-    return fetch
-
-
+# 1x1 transparent PNG used as a stand-in when a cid: lookup misses or a network
+# URL is blocked. Keeps layout from collapsing without leaking any data.
 _BLANK_PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
     "890000000d49444154789c63000100000005000100"
@@ -238,19 +248,62 @@ _BLANK_PNG = bytes.fromhex(
 )
 
 
+def _make_url_fetcher(
+    inline_resources: dict[str, tuple[bytes, str, str]],
+    *,
+    allow_network: bool,
+):
+    """Build a WeasyPrint url_fetcher with two policies baked in:
+
+    1. ``cid:`` URLs resolve from ``inline_resources`` — never the network.
+    2. ``http(s)``/``ftp`` URLs are blocked unless ``allow_network`` is True.
+       Blocking is the default because email bodies routinely contain tracking
+       pixels; fetching them on render would leak the recipient's IP and
+       confirm-of-receipt to the sender.
+
+    ``data:`` and ``file:`` URLs fall through to WeasyPrint's default fetcher.
+    """
+    from weasyprint import default_url_fetcher
+    from weasyprint.urls import URLFetcherResponse
+
+    def _blank_png_response(url: str) -> "URLFetcherResponse":
+        return URLFetcherResponse(url, body=_BLANK_PNG, headers={"Content-Type": "image/png"})
+
+    def fetch(url: str, timeout: int = 10, ssl_context=None):
+        if url.startswith("cid:"):
+            cid = url[4:].strip("<>").strip()
+            entry = inline_resources.get(cid)
+            if entry is None:
+                lc = cid.lower()
+                for k, v in inline_resources.items():
+                    if k.lower() == lc:
+                        entry = v
+                        break
+            if entry is None:
+                return _blank_png_response(url)
+            data, mime, _name = entry
+            return URLFetcherResponse(url, body=data, headers={"Content-Type": mime or "application/octet-stream"})
+
+        if url.startswith(("http://", "https://", "ftp://", "ftps://")) and not allow_network:
+            return _blank_png_response(url)
+
+        return default_url_fetcher(url, timeout=timeout, ssl_context=ssl_context)
+
+    return fetch
+
+
 def render_pdf(
     parsed: ParsedEmail,
     out_path: str | Path,
     *,
-    embedded: list[tuple[str, bytes]] | None = None,
-    inline_resources: dict[str, tuple[bytes, str]] | None = None,
     base_url: str | None = None,
+    embed_attachments: bool = True,
+    allow_network: bool = False,
 ) -> Path:
     """Render a parsed email to PDF.
 
-    ``embedded`` — list of (name, bytes) to embed in the PDF's attachments panel.
-    ``inline_resources`` — map of Content-ID → (bytes, mime) used to resolve
-    `cid:` URLs in the HTML body (inline images from the original .msg).
+    Reads embedded attachments and inline image resources from ``parsed``.
+    Network fetches are blocked unless ``allow_network`` is set.
     """
     _ensure_macos_native_libs()
     from weasyprint import HTML, Attachment
@@ -258,67 +311,62 @@ def render_pdf(
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    attachments = None
-    if embedded:
-        attachments = [
+    weasy_attachments = None
+    if embed_attachments and parsed.embedded_files:
+        weasy_attachments = [
             Attachment(string=data, name=name, description=name)
-            for name, data in embedded
+            for name, data in parsed.embedded_files
         ]
+        parsed.attachments_embedded = True
+    else:
+        parsed.attachments_embedded = False
 
-    url_fetcher = _make_cid_fetcher(inline_resources) if inline_resources else None
-
+    fetcher = _make_url_fetcher(parsed.inline_resources, allow_network=allow_network)
     html = render_html(parsed)
-    kwargs = {"string": html, "base_url": base_url}
-    if url_fetcher is not None:
-        kwargs["url_fetcher"] = url_fetcher
-    HTML(**kwargs).write_pdf(str(out_path), attachments=attachments)
+    HTML(string=html, base_url=base_url, url_fetcher=fetcher).write_pdf(
+        str(out_path), attachments=weasy_attachments
+    )
     return out_path
 
 
-def _normalize_cid(value: object) -> str | None:
-    s = _coerce_str(value)
-    if not s:
-        return None
-    return s.strip("<>").strip() or None
+_UNSAFE_FILENAME_RE = re.compile(r"[\x00-\x1f/\\:]")
 
 
-def _collect_msg_resources(
-    msg: _MessageLike, html_body: str | None
-) -> tuple[list[tuple[str, bytes]], dict[str, tuple[bytes, str]], list[str]]:
-    """Walk the .msg's attachments and split them into:
-      - regular attachments to embed/list (name, bytes)
-      - inline image resources keyed by CID (cid -> (bytes, mime))
-      - display names for the visible Attachments section
+def _sanitize_filename(name: str) -> str:
+    """Reduce ``name`` to a safe basename suitable for writing to disk.
 
-    An attachment is treated as inline (and excluded from the visible list)
-    when it has a Content-ID that is referenced by a `cid:` URL in the HTML body.
+    Strips directory components, control chars, and platform-specific path
+    separators / drive-letter colons. The attachment filenames in a .msg are
+    attacker-controlled, so this guards the sidecar extraction path against
+    traversal (`../../etc/passwd`) and NUL-byte tricks.
     """
-    haystack = html_body or ""
-    embed: list[tuple[str, bytes]] = []
-    inline: dict[str, tuple[bytes, str]] = {}
-    visible: list[str] = []
+    # Normalize Windows separators on non-Windows hosts so we still split.
+    normalized = name.replace("\\", "/")
+    base = os.path.basename(normalized).strip().lstrip(".")
+    safe = _UNSAFE_FILENAME_RE.sub("_", base)
+    return safe or "attachment.bin"
 
-    for att in (msg.attachments or []):
-        data = getattr(att, "data", None)
-        if not isinstance(data, (bytes, bytearray, memoryview)):
-            continue
-        raw = bytes(data)
-        name = _attachment_name(att)
-        cid = _normalize_cid(getattr(att, "cid", None) or getattr(att, "contentId", None))
-        mime = _coerce_str(getattr(att, "mimetype", None)) or "application/octet-stream"
 
-        cid_referenced = bool(cid) and (f"cid:{cid}" in haystack)
-        if cid:
-            inline[cid] = (raw, mime)
+def _extract_attachments_to_disk(parsed: ParsedEmail, target: str | Path) -> None:
+    target = Path(target)
+    target.mkdir(parents=True, exist_ok=True)
+    used: set[str] = set()
 
-        if cid_referenced:
-            # purely inline — don't clutter the attachment list / embedded files pile
-            continue
+    def _write(name: str, data: bytes) -> None:
+        safe = _sanitize_filename(name)
+        # collision-avoidance: if name already used, prepend an index
+        candidate, n = safe, 1
+        while candidate in used:
+            stem, dot, ext = safe.partition(".")
+            candidate = f"{stem}_{n}{dot}{ext}" if dot else f"{safe}_{n}"
+            n += 1
+        used.add(candidate)
+        (target / candidate).write_bytes(data)
 
-        embed.append((name, raw))
-        visible.append(name)
-
-    return embed, inline, visible
+    for name, data in parsed.embedded_files:
+        _write(name, data)
+    for _cid, (data, _mime, name) in parsed.inline_resources.items():
+        _write(name, data)
 
 
 def convert_msg_to_pdf(
@@ -327,6 +375,7 @@ def convert_msg_to_pdf(
     *,
     embed_attachments: bool = True,
     extract_attachments_to: str | Path | None = None,
+    allow_network: bool = False,
 ) -> Path:
     import extract_msg
 
@@ -335,27 +384,14 @@ def convert_msg_to_pdf(
 
     with extract_msg.openMsg(str(msg_path)) as msg:
         parsed = parse_message(msg)
-        embed_list, inline_resources, visible_names = _collect_msg_resources(
-            msg, parsed.html_body
-        )
 
-        # Override the parsed.attachments list so inline-only images don't show up
-        parsed.attachments = visible_names
-        parsed.attachments_embedded = bool(embed_list) and embed_attachments
-
-        if extract_attachments_to is not None and msg.attachments:
-            target = Path(extract_attachments_to)
-            target.mkdir(parents=True, exist_ok=True)
-            for att in msg.attachments:
-                try:
-                    att.save(customPath=str(target))
-                except Exception:
-                    pass
+    if extract_attachments_to is not None:
+        _extract_attachments_to_disk(parsed, extract_attachments_to)
 
     return render_pdf(
         parsed,
         pdf_path,
-        embedded=embed_list if embed_attachments else None,
-        inline_resources=inline_resources or None,
         base_url=str(msg_path.parent),
+        embed_attachments=embed_attachments,
+        allow_network=allow_network,
     )

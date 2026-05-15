@@ -70,6 +70,12 @@ def _expand_inputs(inputs: tuple[Path, ...], recursive: bool) -> list[Path]:
     default=False,
     help="Also write attachments to a sidecar folder named <input>_attachments/.",
 )
+@click.option(
+    "--allow-network",
+    is_flag=True,
+    help="Allow WeasyPrint to fetch http(s) URLs referenced in the email body. "
+    "Off by default to avoid tracking-pixel callbacks that confirm receipt to the sender.",
+)
 @click.option("-q", "--quiet", is_flag=True, help="Suppress progress output.")
 def cli(
     inputs: tuple[Path, ...],
@@ -78,6 +84,7 @@ def cli(
     recursive: bool,
     embed_attachments: bool,
     extract_attachments: bool,
+    allow_network: bool,
     quiet: bool,
 ) -> None:
     """Convert Outlook .msg files to PDF.
@@ -114,6 +121,7 @@ def cli(
                 dest,
                 embed_attachments=embed_attachments,
                 extract_attachments_to=attachments_dir,
+                allow_network=allow_network,
             )
         except Exception as e:
             failures += 1

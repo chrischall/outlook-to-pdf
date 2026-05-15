@@ -14,3 +14,6 @@ wheels/
 /*.msg
 /*.pdf
 /output/
+
+# macOS
+.DS_Store
