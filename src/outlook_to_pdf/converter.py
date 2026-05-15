@@ -253,15 +253,17 @@ def _make_url_fetcher(
     *,
     allow_network: bool,
 ):
-    """Build a WeasyPrint url_fetcher with two policies baked in:
+    """Build a WeasyPrint url_fetcher with a strict allowlist:
 
-    1. ``cid:`` URLs resolve from ``inline_resources`` — never the network.
-    2. ``http(s)``/``ftp`` URLs are blocked unless ``allow_network`` is True.
-       Blocking is the default because email bodies routinely contain tracking
-       pixels; fetching them on render would leak the recipient's IP and
-       confirm-of-receipt to the sender.
+    - ``cid:`` URLs resolve from ``inline_resources`` (never the network).
+    - ``data:`` URLs are passed through (fully self-contained).
+    - Everything else — ``http(s)``, ``ftp``, ``file``, ``about``, etc. — is
+      blocked unless ``allow_network`` is True.
 
-    ``data:`` and ``file:`` URLs fall through to WeasyPrint's default fetcher.
+    Blocking is the default because email bodies routinely contain tracking
+    pixels (http leak), `<img src="file:///etc/passwd">` style probes
+    (local-file leak), or relative paths that resolve under ``base_url`` to
+    something on disk. We never want to read those during render.
     """
     from weasyprint import default_url_fetcher
     from weasyprint.urls import URLFetcherResponse
@@ -284,10 +286,13 @@ def _make_url_fetcher(
             data, mime, _name = entry
             return URLFetcherResponse(url, body=data, headers={"Content-Type": mime or "application/octet-stream"})
 
-        if url.startswith(("http://", "https://", "ftp://", "ftps://")) and not allow_network:
-            return _blank_png_response(url)
+        if url.startswith("data:"):
+            return default_url_fetcher(url, timeout=timeout, ssl_context=ssl_context)
 
-        return default_url_fetcher(url, timeout=timeout, ssl_context=ssl_context)
+        if allow_network:
+            return default_url_fetcher(url, timeout=timeout, ssl_context=ssl_context)
+
+        return _blank_png_response(url)
 
     return fetch
 

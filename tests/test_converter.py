@@ -10,9 +10,11 @@ import pytest
 
 from outlook_to_pdf.converter import (
     ParsedEmail,
+    _attachment_name,
+    _coerce_str,
+    _extract_attachments_to_disk,
     _make_url_fetcher,
     _sanitize_filename,
-    _extract_attachments_to_disk,
     convert_msg_to_pdf,
     parse_message,
     render_html,
@@ -48,6 +50,48 @@ class FakeMessage:
 
 
 SAMPLE_MSG = Path(__file__).parent / "fixtures" / "strangeDate.msg"
+
+
+# --------------------------- _coerce_str / _attachment_name ---------------------------
+
+
+def test_coerce_str_passes_strings_through_and_strips():
+    assert _coerce_str("  hello  ") == "hello"
+    assert _coerce_str("") is None
+    assert _coerce_str(None) is None
+
+
+def test_coerce_str_decodes_utf8_bytes():
+    assert _coerce_str("héllo".encode("utf-8")) == "héllo"
+
+
+def test_coerce_str_decodes_cp1252_smart_quotes():
+    # 0x93 / 0x94 are Windows-1252 smart quotes — invalid UTF-8
+    raw = b"\x93smart\x94"
+    assert _coerce_str(raw) == "“smart”"
+
+
+def test_coerce_str_falls_back_for_undecodable_bytes():
+    # Pure 0xff is rejected by utf-8 and latin-1 actually accepts it as ÿ.
+    # Latin-1 is permissive so we won't hit replacement chars here — confirm
+    # the chain produces *some* string instead of raising.
+    out = _coerce_str(b"\xff\xfe\xfd")
+    assert isinstance(out, str) and out
+
+
+def test_attachment_name_falls_back_to_getfilename():
+    class A:
+        longFilename = None
+        shortFilename = None
+        def getFilename(self):
+            return "from-method.txt"
+    assert _attachment_name(A()) == "from-method.txt"
+
+
+def test_attachment_name_default_when_all_missing():
+    class A:
+        pass
+    assert _attachment_name(A()) == "attachment.bin"
 
 
 # --------------------------- parse_message ---------------------------
@@ -171,6 +215,29 @@ def test_render_html_omits_attachments_section_when_none():
     assert "Attachments" not in out
 
 
+def test_render_html_omits_embed_note_when_not_embedded():
+    out = render_html(ParsedEmail(
+        attachments=["report.pdf"],
+        attachments_embedded=False,
+    ))
+    assert "report.pdf" in out
+    assert "embedded in this PDF" not in out
+
+
+def test_render_html_includes_embed_note_when_embedded():
+    out = render_html(ParsedEmail(
+        attachments=["report.pdf"],
+        attachments_embedded=True,
+    ))
+    assert "embedded in this PDF" in out
+
+
+def test_render_html_escapes_subject():
+    out = render_html(ParsedEmail(subject="<script>alert(1)</script>"))
+    assert "<script>" not in out
+    assert "&lt;script&gt;" in out
+
+
 # --------------------------- render_pdf + embedded files ---------------------------
 
 
@@ -286,6 +353,74 @@ def test_url_fetcher_blocked_url_does_not_hit_network(monkeypatch):
     fetch = _make_url_fetcher({}, allow_network=False)
     fetch("http://tracker.example/pixel.png")
     assert called == []
+
+
+def test_url_fetcher_blocks_file_scheme_by_default(monkeypatch):
+    """A malicious .msg could try <img src="file:///etc/passwd"> to probe
+    local files. The default fetcher must NOT read them."""
+    import weasyprint
+
+    def boom(*a, **kw):
+        raise AssertionError("default_url_fetcher should not be called for file://")
+
+    monkeypatch.setattr(weasyprint, "default_url_fetcher", boom)
+    fetch = _make_url_fetcher({}, allow_network=False)
+    resp = fetch("file:///etc/passwd")
+    assert resp.read().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_url_fetcher_blocks_unknown_scheme_by_default():
+    fetch = _make_url_fetcher({}, allow_network=False)
+    # about:, javascript:, gopher: — anything weird is also blocked
+    for url in ("about:blank", "javascript:alert(1)", "gopher://example/"):
+        assert fetch(url).read().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_url_fetcher_allows_data_urls_by_default():
+    fetch = _make_url_fetcher({}, allow_network=False)
+    # Smallest valid PNG, base64
+    data_url = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEX/AAAZ4gk3AAAAAXRSTlMAQObYZgAAAApJREFUCNdjYAAAAAIAAeIhvDMAAAAASUVORK5CYII="
+    )
+    resp = fetch(data_url)
+    assert resp.read().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_url_fetcher_allow_network_passes_through(monkeypatch):
+    """When the user opts in with --allow-network, http URLs reach the default fetcher."""
+    from weasyprint.urls import URLFetcherResponse
+    import outlook_to_pdf.converter as c
+
+    captured: list[str] = []
+
+    def fake(url, **kw):
+        captured.append(url)
+        return URLFetcherResponse(url, body=b"\x89PNG\r\n\x1a\nFAKE", headers={"Content-Type": "image/png"})
+
+    monkeypatch.setattr(c, "_make_url_fetcher", c._make_url_fetcher)  # ensure not patched elsewhere
+    # Patch default_url_fetcher in weasyprint itself
+    import weasyprint
+    monkeypatch.setattr(weasyprint, "default_url_fetcher", fake)
+
+    fetch = _make_url_fetcher({}, allow_network=True)
+    fetch("https://example.com/img.png")
+    assert captured == ["https://example.com/img.png"]
+
+
+def test_url_fetcher_strips_wrapped_cid_brackets():
+    fetch = _make_url_fetcher(
+        {"abc@x": (b"REAL", "image/png", "p.png")}, allow_network=False
+    )
+    # Outlook sometimes writes <abc@x>
+    assert fetch("cid:<abc@x>").read() == b"REAL"
+
+
+def test_url_fetcher_case_insensitive_cid():
+    fetch = _make_url_fetcher(
+        {"ABC@x": (b"REAL", "image/png", "p.png")}, allow_network=False
+    )
+    assert fetch("cid:abc@x").read() == b"REAL"
 
 
 # --------------------------- filename sanitization ---------------------------

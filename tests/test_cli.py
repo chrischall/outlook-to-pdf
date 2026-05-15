@@ -106,3 +106,119 @@ def test_cli_errors_when_directory_has_no_msg(tmp_path):
     result = runner.invoke(cli, [str(tmp_path)])
     assert result.exit_code != 0
     assert "no .msg files" in result.output.lower() or "no .msg files" in (result.stderr or "").lower()
+
+
+@pytest.mark.skipif(not SAMPLE_MSG.exists(), reason="sample .msg fixture missing")
+def test_cli_o_with_multiple_inputs_is_usage_error(tmp_path):
+    root = _seed_msg_tree(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(cli, [str(root / "a.msg"), str(root / "b.msg"), "-o", str(tmp_path / "x.pdf")])
+    assert result.exit_code != 0
+    combined = (result.output or "") + (result.stderr or "")
+    assert "-o" in combined.lower() or "--output" in combined.lower()
+
+
+def test_cli_malformed_msg_fails_gracefully(tmp_path):
+    bad = tmp_path / "fake.msg"
+    bad.write_text("this is not a CFB compound file")
+    runner = CliRunner()
+    result = runner.invoke(cli, [str(bad)])
+    assert result.exit_code != 0
+    assert "error:" in (result.output + (result.stderr or "")).lower()
+    # Should not have written a half-baked PDF
+    assert not (tmp_path / "fake.pdf").exists()
+
+
+@pytest.mark.skipif(not SAMPLE_MSG.exists(), reason="sample .msg fixture missing")
+def test_cli_extract_attachments_creates_sidecar(tmp_path, monkeypatch):
+    """Verify --extract-attachments propagates and writes a sidecar dir."""
+    src = tmp_path / "with-att.msg"
+    src.write_bytes(SAMPLE_MSG.read_bytes())
+
+    captured: dict = {}
+    import outlook_to_pdf.cli as cli_mod
+    real = cli_mod.convert_msg_to_pdf
+
+    def spy(msg_path, pdf_path, **kw):
+        captured.update(kw)
+        return real(msg_path, pdf_path, **kw)
+
+    monkeypatch.setattr(cli_mod, "convert_msg_to_pdf", spy)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, [str(src), "--extract-attachments"])
+    assert result.exit_code == 0, result.output
+    assert captured.get("extract_attachments_to") == tmp_path / "with-att_attachments"
+
+
+@pytest.mark.skipif(not SAMPLE_MSG.exists(), reason="sample .msg fixture missing")
+def test_cli_no_embed_flag_propagates(tmp_path, monkeypatch):
+    src = tmp_path / "x.msg"
+    src.write_bytes(SAMPLE_MSG.read_bytes())
+
+    captured: dict = {}
+    import outlook_to_pdf.cli as cli_mod
+    real = cli_mod.convert_msg_to_pdf
+
+    def spy(msg_path, pdf_path, **kw):
+        captured.update(kw)
+        return real(msg_path, pdf_path, **kw)
+
+    monkeypatch.setattr(cli_mod, "convert_msg_to_pdf", spy)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, [str(src), "--no-embed-attachments"])
+    assert result.exit_code == 0, result.output
+    assert captured["embed_attachments"] is False
+
+
+@pytest.mark.skipif(not SAMPLE_MSG.exists(), reason="sample .msg fixture missing")
+def test_cli_allow_network_flag_propagates(tmp_path, monkeypatch):
+    src = tmp_path / "x.msg"
+    src.write_bytes(SAMPLE_MSG.read_bytes())
+
+    captured: dict = {}
+    import outlook_to_pdf.cli as cli_mod
+    real = cli_mod.convert_msg_to_pdf
+
+    def spy(msg_path, pdf_path, **kw):
+        captured.update(kw)
+        return real(msg_path, pdf_path, **kw)
+
+    monkeypatch.setattr(cli_mod, "convert_msg_to_pdf", spy)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, [str(src), "--allow-network"])
+    assert result.exit_code == 0, result.output
+    assert captured["allow_network"] is True
+
+    # And the default is False
+    captured.clear()
+    result = runner.invoke(cli, [str(src)])
+    assert result.exit_code == 0
+    assert captured["allow_network"] is False
+
+
+@pytest.mark.skipif(not SAMPLE_MSG.exists(), reason="sample .msg fixture missing")
+def test_cli_continues_after_one_failure_and_exits_nonzero(tmp_path):
+    """One bad file shouldn't stop the others — but the exit code must reflect failure."""
+    good = tmp_path / "good.msg"
+    good.write_bytes(SAMPLE_MSG.read_bytes())
+    bad = tmp_path / "bad.msg"
+    bad.write_text("not a real msg")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, [str(good), str(bad)])
+    assert result.exit_code != 0
+    assert (tmp_path / "good.pdf").exists()  # the good one still converted
+    assert not (tmp_path / "bad.pdf").exists()
+
+
+@pytest.mark.skipif(not SAMPLE_MSG.exists(), reason="sample .msg fixture missing")
+def test_cli_quiet_suppresses_progress(tmp_path):
+    src = tmp_path / "x.msg"
+    src.write_bytes(SAMPLE_MSG.read_bytes())
+    runner = CliRunner()
+    result = runner.invoke(cli, [str(src), "-q"])
+    assert result.exit_code == 0
+    assert "->" not in result.output
