@@ -203,14 +203,55 @@ def render_html(parsed: ParsedEmail) -> str:
     )
 
 
+def _make_cid_fetcher(cid_map: dict[str, tuple[bytes, str]]):
+    """Build a WeasyPrint url_fetcher that resolves `cid:` URLs from a map.
+
+    Falls back to WeasyPrint's default fetcher for any other URL scheme.
+    """
+    from weasyprint import default_url_fetcher
+    from weasyprint.urls import URLFetcherResponse
+
+    def fetch(url: str, timeout: int = 10, ssl_context=None):
+        if url.startswith("cid:"):
+            cid = url[4:].strip("<>").strip()
+            entry = cid_map.get(cid)
+            if entry is None:
+                for k, v in cid_map.items():
+                    if k.lower() == cid.lower():
+                        entry = v
+                        break
+            if entry is None:
+                data, mime = _BLANK_PNG, "image/png"
+            else:
+                data, mime = entry
+                mime = mime or "application/octet-stream"
+            return URLFetcherResponse(url, body=data, headers={"Content-Type": mime})
+        return default_url_fetcher(url, timeout=timeout, ssl_context=ssl_context)
+
+    return fetch
+
+
+_BLANK_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+    "890000000d49444154789c63000100000005000100"
+    "0d0a2db40000000049454e44ae426082"
+)
+
+
 def render_pdf(
     parsed: ParsedEmail,
     out_path: str | Path,
     *,
     embedded: list[tuple[str, bytes]] | None = None,
+    inline_resources: dict[str, tuple[bytes, str]] | None = None,
     base_url: str | None = None,
 ) -> Path:
-    """Render a parsed email to PDF, optionally embedding files inside it."""
+    """Render a parsed email to PDF.
+
+    ``embedded`` — list of (name, bytes) to embed in the PDF's attachments panel.
+    ``inline_resources`` — map of Content-ID → (bytes, mime) used to resolve
+    `cid:` URLs in the HTML body (inline images from the original .msg).
+    """
     _ensure_macos_native_libs()
     from weasyprint import HTML, Attachment
 
@@ -224,21 +265,60 @@ def render_pdf(
             for name, data in embedded
         ]
 
+    url_fetcher = _make_cid_fetcher(inline_resources) if inline_resources else None
+
     html = render_html(parsed)
-    HTML(string=html, base_url=base_url).write_pdf(
-        str(out_path),
-        attachments=attachments,
-    )
+    kwargs = {"string": html, "base_url": base_url}
+    if url_fetcher is not None:
+        kwargs["url_fetcher"] = url_fetcher
+    HTML(**kwargs).write_pdf(str(out_path), attachments=attachments)
     return out_path
 
 
-def _collect_attachment_bytes(msg: _MessageLike) -> list[tuple[str, bytes]]:
-    out: list[tuple[str, bytes]] = []
+def _normalize_cid(value: object) -> str | None:
+    s = _coerce_str(value)
+    if not s:
+        return None
+    return s.strip("<>").strip() or None
+
+
+def _collect_msg_resources(
+    msg: _MessageLike, html_body: str | None
+) -> tuple[list[tuple[str, bytes]], dict[str, tuple[bytes, str]], list[str]]:
+    """Walk the .msg's attachments and split them into:
+      - regular attachments to embed/list (name, bytes)
+      - inline image resources keyed by CID (cid -> (bytes, mime))
+      - display names for the visible Attachments section
+
+    An attachment is treated as inline (and excluded from the visible list)
+    when it has a Content-ID that is referenced by a `cid:` URL in the HTML body.
+    """
+    haystack = html_body or ""
+    embed: list[tuple[str, bytes]] = []
+    inline: dict[str, tuple[bytes, str]] = {}
+    visible: list[str] = []
+
     for att in (msg.attachments or []):
         data = getattr(att, "data", None)
-        if isinstance(data, (bytes, bytearray, memoryview)):
-            out.append((_attachment_name(att), bytes(data)))
-    return out
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            continue
+        raw = bytes(data)
+        name = _attachment_name(att)
+        cid = _normalize_cid(getattr(att, "cid", None) or getattr(att, "contentId", None))
+        mime = _coerce_str(getattr(att, "mimetype", None)) or "application/octet-stream"
+
+        cid_referenced = bool(cid) and (f"cid:{cid}" in haystack)
+        if cid:
+            inline[cid] = (raw, mime)
+
+        if cid_referenced:
+            # purely inline — don't clutter the attachment list / embedded files pile
+            continue
+
+        embed.append((name, raw))
+        visible.append(name)
+
+    return embed, inline, visible
 
 
 def convert_msg_to_pdf(
@@ -255,8 +335,14 @@ def convert_msg_to_pdf(
 
     with extract_msg.openMsg(str(msg_path)) as msg:
         parsed = parse_message(msg)
-        embedded = _collect_attachment_bytes(msg) if embed_attachments else []
-        parsed.attachments_embedded = bool(embedded)
+        embed_list, inline_resources, visible_names = _collect_msg_resources(
+            msg, parsed.html_body
+        )
+
+        # Override the parsed.attachments list so inline-only images don't show up
+        parsed.attachments = visible_names
+        parsed.attachments_embedded = bool(embed_list) and embed_attachments
+
         if extract_attachments_to is not None and msg.attachments:
             target = Path(extract_attachments_to)
             target.mkdir(parents=True, exist_ok=True)
@@ -266,4 +352,10 @@ def convert_msg_to_pdf(
                 except Exception:
                     pass
 
-    return render_pdf(parsed, pdf_path, embedded=embedded, base_url=str(msg_path.parent))
+    return render_pdf(
+        parsed,
+        pdf_path,
+        embedded=embed_list if embed_attachments else None,
+        inline_resources=inline_resources or None,
+        base_url=str(msg_path.parent),
+    )

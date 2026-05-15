@@ -255,6 +255,80 @@ def test_render_pdf_embeds_attachments(tmp_path):
     assert files["data.bin"] == payload
 
 
+def test_render_pdf_resolves_cid_inline_image(tmp_path):
+    import io
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), (255, 0, 0)).save(buf, format="PNG")
+    red_png = buf.getvalue()
+
+    parsed = ParsedEmail(
+        subject="inline-img",
+        sender=None, to=None, cc=None, bcc=None,
+        date_display=None,
+        text_body="",
+        html_body='<html><body><p>Look:</p><img src="cid:pic1@example"></body></html>',
+        attachments=[],
+    )
+
+    out = render_pdf(
+        parsed,
+        tmp_path / "inline.pdf",
+        inline_resources={"pic1@example": (red_png, "image/png")},
+    )
+    data = out.read_bytes()
+    assert data[:4] == b"%PDF"
+    # WeasyPrint embeds raster images as PDF Image XObjects; the decoded PNG
+    # bytes won't appear literally, but an /Image object should be present.
+    assert b"/Image" in data or b"/XObject" in data
+
+
+def test_render_pdf_missing_cid_does_not_crash(tmp_path):
+    parsed = ParsedEmail(
+        subject="x",
+        sender=None, to=None, cc=None, bcc=None,
+        date_display=None,
+        text_body="",
+        html_body='<html><body><img src="cid:does-not-exist"></body></html>',
+        attachments=[],
+    )
+    out = render_pdf(parsed, tmp_path / "missing.pdf", inline_resources={"other": (b"", "image/png")})
+    assert out.read_bytes()[:4] == b"%PDF"
+
+
+def test_collect_msg_resources_splits_inline_vs_visible():
+    from outlook_to_pdf.converter import _collect_msg_resources
+
+    class A:
+        def __init__(self, name, data, cid=None, mime=None):
+            self.longFilename = name
+            self.shortFilename = name
+            self.data = data
+            self.cid = cid
+            self.mimetype = mime
+
+    html = '<p><img src="cid:logo@x"></p><img src="cid:banner@x">'
+    msg = FakeMessage(
+        htmlBody=html.encode("utf-8"),
+        attachments=[
+            A("logo.png", b"PNG1", cid="logo@x", mime="image/png"),
+            A("banner.png", b"PNG2", cid="banner@x", mime="image/png"),
+            A("report.pdf", b"PDFBYTES", cid=None),
+            A("orphan.png", b"PNG3", cid="not-referenced@x", mime="image/png"),
+        ],
+    )
+
+    embed, inline, visible = _collect_msg_resources(msg, html)
+
+    # logo+banner are inline-only -> NOT in embed/visible
+    assert visible == ["report.pdf", "orphan.png"]
+    assert sorted(n for n, _ in embed) == ["orphan.png", "report.pdf"]
+    # all attachments with a CID are available for cid: resolution
+    assert set(inline) == {"logo@x", "banner@x", "not-referenced@x"}
+    assert inline["logo@x"] == (b"PNG1", "image/png")
+
+
 def test_render_pdf_handles_binary_zip_payload(tmp_path):
     import io, zipfile
 

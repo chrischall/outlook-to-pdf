@@ -8,3 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local scratch / personal .msg or .pdf files at the repo root
+# (test fixtures live under tests/ and are not affected)
+/*.msg
+/*.pdf
+/output/
