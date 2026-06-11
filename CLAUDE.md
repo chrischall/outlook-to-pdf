@@ -139,7 +139,8 @@ Open with `gh pr create --label <label>` (or `--label ignore-for-release` for ch
   `render_pdf` calls it first; preserve that ordering if refactoring.
 - **Deprecation warnings fail tests** (see `pyproject.toml`
   `filterwarnings`). Bumping `extract-msg`/`weasyprint` may surface new ones.
-- **No CI yet**: there is no `.github/workflows/` directory. Tests run
-  locally only; PRs do not auto-validate. (If adding CI, label the PR `ci`.)
+- **CI**: `.github/workflows/` has ci, pr-auto-review, auto-merge, claude, and
+  release-please workflows. PRs auto-validate and squash-merge on a `pass`
+  review verdict.
 - **Versioning**: `pyproject.toml` `version = "0.1.0"`. There is no
   automated tag-and-bump pipeline; bump manually when releasing.

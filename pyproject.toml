@@ -6,6 +6,7 @@ authors = [
     { name = "Chris Hall", email = "chris.c.hall@gmail.com" }
 ]
 requires-python = ">=3.12"
+license = { text = "MIT" }
 dependencies = [
     "click>=8.3.3",
     "extract-msg>=0.55.0",
