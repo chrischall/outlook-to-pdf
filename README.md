@@ -1,5 +1,8 @@
 # outlook-to-pdf
 
+[![CI](https://github.com/chrischall/outlook-to-pdf/actions/workflows/ci.yml/badge.svg)](https://github.com/chrischall/outlook-to-pdf/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 A small Python CLI that converts Outlook `.msg` files into self-contained PDFs,
 with the original attachments **embedded inside the PDF** so the recipient can
 extract them from any modern viewer.
