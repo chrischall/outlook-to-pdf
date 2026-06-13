@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.3](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.2...v0.1.3) (2026-06-12)
+
+
+### Bug Fixes
+
+* bot PRs bypass the CI gate unconditionally (upstream curtaincall[#86](https://github.com/chrischall/outlook-to-pdf/issues/86) review) ([#17](https://github.com/chrischall/outlook-to-pdf/issues/17)) ([028fda4](https://github.com/chrischall/outlook-to-pdf/commit/028fda4669dc35a3b0627a889f36cecdf0c66036))
+
+
+### Documentation
+
+* declare MIT license and add README badges ([#19](https://github.com/chrischall/outlook-to-pdf/issues/19)) ([c54cea9](https://github.com/chrischall/outlook-to-pdf/commit/c54cea9a570395af568210d7c2f0991708a172f3))
+
 ## [0.1.2](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.1...v0.1.2) (2026-05-29)
 
 
