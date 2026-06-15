@@ -121,6 +121,19 @@ The **PR title MUST be a Conventional Commit**, written user-facing (`fix(scope)
 
 Open with `gh pr create --label <label>` (or `--label ignore-for-release` for chores not worth a line). **Don't run `gh pr merge` yourself** — leave merging to the user. The repo is **squash-only** (no merge commit, no rebase), so don't pass `--merge`/`--rebase`.
 
+### Auto-review follow-up issues
+
+When a PR's auto-review verdict is `warn` or `fail`, the `chrischall/workflows` pipeline opens or updates a single `auto-review-followup` issue ("Auto-review follow-ups for PR #N") whose checklist captures every finding, and links it from the PR's `<!-- auto-review-verdict -->` comment (`📋 Tracking follow-ups: #N`). `warn` (nits only) still auto-merges — the issue carries the nits forward, so most nits are fixed in a *later* PR; `fail` blocks until the important findings are addressed on the PR itself.
+
+When asked to address the auto-review comments / review findings on a PR:
+
+1. Read the verdict comment, open the linked `auto-review-followup` issue, and treat its checklist as the work list (alongside any inline review comments).
+2. Resolve each item, checking off only what you've **verified** is genuinely fixed.
+3. If every item is resolved on the current PR, add `Closes #<issue>` to that PR's body so the merge closes it; if some are deferred, check off only the resolved ones and leave the issue open.
+4. For nits whose `warn` PR already auto-merged, address them in a follow-up PR that references `Closes #<issue>`.
+
+(Mirrors the fleet-wide convention in `~/.claude/CLAUDE.md`.)
+
 ## Gotchas
 
 - **`-o/--output` is single-input only**: combining it with multiple resolved
@@ -140,7 +153,12 @@ Open with `gh pr create --label <label>` (or `--label ignore-for-release` for ch
 - **Deprecation warnings fail tests** (see `pyproject.toml`
   `filterwarnings`). Bumping `extract-msg`/`weasyprint` may surface new ones.
 - **CI**: `.github/workflows/` has ci, pr-auto-review, auto-merge, claude, and
-  release-please workflows. PRs auto-validate and squash-merge on a `pass`
-  review verdict.
-- **Versioning**: `pyproject.toml` `version = "0.1.0"`. There is no
-  automated tag-and-bump pipeline; bump manually when releasing.
+  release-please workflows. `pr-auto-review.yml` and `auto-merge.yml` are thin
+  stubs that call `chrischall/workflows` reusable pipelines. A `pass` or `warn`
+  auto-review verdict arms `ready-to-merge` and the PR squash-merges once CI is
+  green; `warn`/`fail` also open an `auto-review-followup` issue, and only
+  `fail` blocks the merge (see *Auto-review follow-up issues*).
+- **Versioning**: release-please owns version bumps and tags. The version lives
+  in `pyproject.toml` (`version`) and `.release-please-manifest.json`, kept in
+  sync by release-please's `python` release-type. Don't bump by hand or cut
+  tags — merging the release PR release-please opens does it.
