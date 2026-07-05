@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.4](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.3...v0.1.4) (2026-06-20)
+
+
+### Documentation
+
+* fix versioning gotcha and add auto-review follow-up convention ([#25](https://github.com/chrischall/outlook-to-pdf/issues/25)) ([3466e8c](https://github.com/chrischall/outlook-to-pdf/commit/3466e8cc78c9bed17aee5498b42ba34fe819aeb1))
+* require Conventional Commit PR titles; correct squash-merge guidance ([#23](https://github.com/chrischall/outlook-to-pdf/issues/23)) ([650e209](https://github.com/chrischall/outlook-to-pdf/commit/650e20981b35a59138520034278ab186cbdf47bf))
+
 ## [0.1.3](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.2...v0.1.3) (2026-06-12)
 
 
