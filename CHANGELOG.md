@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.4...v0.1.5) (2026-07-19)
+
+
+### Documentation
+
+* replace duplicated fleet policy with a pointer ([#31](https://github.com/chrischall/outlook-to-pdf/issues/31)) ([5c40fe7](https://github.com/chrischall/outlook-to-pdf/commit/5c40fe7f334280a392b73787b77638c68da5575c))
+
 ## [0.1.4](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.3...v0.1.4) (2026-06-20)
 
 
