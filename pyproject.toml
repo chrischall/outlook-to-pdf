@@ -1,6 +1,6 @@
 [project]
 name = "outlook-to-pdf"
-version = "0.1.5"
+version = "0.1.6"
 description = "Convert Outlook .msg files to self-contained PDFs with embedded attachments."
 authors = [
     { name = "Chris Hall", email = "chris.c.hall@gmail.com" }
