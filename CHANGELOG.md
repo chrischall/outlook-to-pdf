@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.5...v0.1.6) (2026-07-25)
+
+
+### Bug Fixes
+
+* **deps:** upgrade weasyprint to 69.0, out of the CSS-injection advisory ([#34](https://github.com/chrischall/outlook-to-pdf/issues/34)) ([3fdb087](https://github.com/chrischall/outlook-to-pdf/commit/3fdb0874755681d61eb0fa1c46f1b87565ad345b))
+
 ## [0.1.5](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.4...v0.1.5) (2026-07-19)
 
 
