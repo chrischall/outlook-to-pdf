@@ -27,7 +27,7 @@ jobs:
         with:
           mode: status
 
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         if: steps.gate.outputs.run == 'true'
 
       - name: Install uv
