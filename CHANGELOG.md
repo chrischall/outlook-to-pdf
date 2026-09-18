@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.7](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.6...v0.1.7) (2026-09-18)
+
+
+### Bug Fixes
+
+* **deps:** bump weasyprint from 69.0 to 70.0 ([#48](https://github.com/chrischall/outlook-to-pdf/issues/48)) ([2ef56a5](https://github.com/chrischall/outlook-to-pdf/commit/2ef56a556362b6066ca7f5d00dde4267f0aceec2))
+
 ## [0.1.6](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.5...v0.1.6) (2026-07-25)
 
 
