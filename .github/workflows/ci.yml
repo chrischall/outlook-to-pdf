@@ -30,6 +30,12 @@ jobs:
       - uses: actions/checkout@v7.0.1
         if: steps.gate.outputs.run == 'true'
 
+      # WeasyPrint 70+ warns on every render without HarfBuzz-Subset, which
+      # the ubuntu image doesn't ship; the CLI tests treat that stderr as a failure.
+      - name: Install HarfBuzz-Subset
+        if: steps.gate.outputs.run == 'true'
+        run: sudo apt-get update -q && sudo apt-get install -y -q libharfbuzz-subset0
+
       - name: Install uv
         if: steps.gate.outputs.run == 'true'
         uses: astral-sh/setup-uv@v7

@@ -40,8 +40,9 @@ On macOS the CLI auto-detects `/opt/homebrew/lib` so no `DYLD_*` env vars are ne
 
 **Debian / Ubuntu:**
 ```sh
-sudo apt install libpango-1.0-0 libpangoft2-1.0-0
+sudo apt install libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0
 ```
+WeasyPrint 70+ needs HarfBuzz-Subset; without it every conversion warns on stderr.
 
 **Fedora / RHEL:**
 ```sh
