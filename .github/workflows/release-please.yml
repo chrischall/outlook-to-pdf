@@ -1,9 +1,58 @@
 name: release-please
 
+# Thin stub: release-please itself runs in chrischall/workflows'
+# reusable-release-please.yml. The file this replaced was one of 18 drifted
+# copies of the same workflow across 81 repos, which meant a fix to release
+# behaviour was a fleet sweep rather than one change
+# (chrischall/workflows#283).
+#
+# WHY IT WAS WORTH CONVERTING
+#   On 2026-09-14 a transient GitHub API error lost release-please's
+#   `release_created` output in three sibling repos AFTER each had already cut
+#   its tag and GitHub Release. Their publish job is gated on that flag, so it
+#   skipped — and re-running could not fix it, because release-please then
+#   correctly reports the release as already existing and sets the flag false
+#   again. The reusable workflow carries the `republish_tag` escape hatch for
+#   exactly that, and resolves the tag and version ONCE for both paths (bare
+#   `version` vs. prefixed `tag_name`; a dispatch supplies only a tag).
+#
+# NOTHING MOVED OUT OF THIS FILE, BECAUSE NOTHING PUBLISHED FROM IT.
+#   Everywhere else in the fleet the publish job stays in the caller, because
+#   npm trusted publishing binds provenance to the repo's own workflow identity
+#   via OIDC. This repo publishes NO artifact anywhere: `outlook-to-pdf` is a
+#   local `uv sync` install from a clone (README §Install), there is no PyPI
+#   release and no other workflow watching tags. So the whole of what this file
+#   ever did — cut the tag, the GitHub Release and the changelog — is what the
+#   reusable workflow now does, with `release-please-config.json` (release-type
+#   `python`) and `.release-please-manifest.json` passed through untouched.
+#
+#   The consequence for the escape hatch below: a `republish_tag` dispatch here
+#   validates that the tag exists and resolves its version, and then stops,
+#   because there is no publish job for its `publish`/`tag`/`version` outputs
+#   to reach. It is carried anyway so this stub is the fleet's shape rather
+#   than a 19th variant — but it is NOT a way to finish a stranded release
+#   today. If this repo ever gains a publisher (PyPI, or assets on the
+#   Release), that job belongs HERE, gated on
+#   `needs.release-please.outputs.publish` — never on `release_created`, which
+#   is false on precisely the republish run that exists to publish.
+
 on:
   push:
     branches: [main]
+  # The dispatch input lives in the caller because a called workflow cannot
+  # declare its caller's triggers. Read the note above before reaching for it.
+  workflow_dispatch:
+    inputs:
+      republish_tag:
+        description: 'Existing tag to re-resolve (e.g. v1.2.3). Blank on the ordinary path. Publishes nothing here — see the header.'
+        required: false
+        type: string
+        default: ''
 
+# Declared here as well as in the called workflow's own job: a reusable
+# workflow's permissions can only narrow the caller's, never widen them, so
+# dropping these would leave release-please unable to write the tag or the
+# release PR.
 permissions:
   contents: write
   pull-requests: write
@@ -14,10 +63,12 @@ concurrency:
 
 jobs:
   release-please:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: googleapis/release-please-action@v5
-        with:
-          token: ${{ secrets.RELEASE_PAT }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+    uses: chrischall/workflows/.github/workflows/reusable-release-please.yml@main
+    # `inputs` is empty on the `push` event, so this is the empty string on
+    # every ordinary run — which is the reusable workflow's "no republish".
+    with:
+      republish_tag: ${{ inputs.republish_tag }}
+    secrets:
+      # Not GITHUB_TOKEN: events it causes do not trigger workflows, so the
+      # release PR would never get CI or an auto-review.
+      release_pat: ${{ secrets.RELEASE_PAT }}
