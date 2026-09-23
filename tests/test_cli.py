@@ -222,3 +222,69 @@ def test_cli_quiet_suppresses_progress(tmp_path):
     result = runner.invoke(cli, [str(src), "-q"])
     assert result.exit_code == 0
     assert "->" not in result.output
+
+
+def _capture_convert(monkeypatch) -> list[dict]:
+    calls: list[dict] = []
+
+    def fake_convert(src, dest, **kw):
+        calls.append({"src": Path(src), "dest": Path(dest), **kw})
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        Path(dest).write_bytes(b"%PDF-fake " + str(src).encode())
+        return Path(dest)
+
+    monkeypatch.setattr("outlook_to_pdf.cli.convert_msg_to_pdf", fake_convert)
+    return calls
+
+
+def test_cli_output_dir_same_stem_inputs_do_not_overwrite(tmp_path, monkeypatch):
+    """a/Invoice.msg and b/Invoice.msg with --output-dir must not both write
+    out/Invoice.pdf (and out/Invoice_attachments/) — fleet-audit#207."""
+    for d in ("a", "b"):
+        (tmp_path / d).mkdir()
+        (tmp_path / d / "Invoice.msg").write_bytes(b"x")
+    out = tmp_path / "out"
+    calls = _capture_convert(monkeypatch)
+
+    result = CliRunner().invoke(
+        cli, ["-r", str(tmp_path), "--output-dir", str(out), "--extract-attachments"]
+    )
+    assert result.exit_code == 0, result.output
+
+    dests = [c["dest"] for c in calls]
+    assert len(dests) == 2
+    assert len(set(dests)) == 2, dests
+    sidecars = [c["extract_attachments_to"] for c in calls]
+    assert len(set(sidecars)) == 2, sidecars
+    assert sorted(p.name for p in out.glob("*.pdf")) == ["Invoice.pdf", "Invoice_1.pdf"]
+    # the rename is surfaced, not silent
+    assert "Invoice_1.pdf" in result.output
+    assert "warning" in result.output.lower()
+
+
+def test_cli_output_dir_case_only_collision_is_deduplicated(tmp_path, monkeypatch):
+    """On case-insensitive filesystems (macOS default) Invoice.pdf and
+    invoice.pdf are the same file, so treat them as a collision too."""
+    for d, name in (("a", "Invoice.msg"), ("b", "invoice.msg")):
+        (tmp_path / d).mkdir()
+        (tmp_path / d / name).write_bytes(b"x")
+    calls = _capture_convert(monkeypatch)
+
+    result = CliRunner().invoke(cli, ["-r", str(tmp_path), "--output-dir", str(tmp_path / "out")])
+    assert result.exit_code == 0, result.output
+    names = [c["dest"].name.lower() for c in calls]
+    assert len(set(names)) == 2, names
+
+
+def test_cli_dedup_suffix_does_not_clash_with_real_input(tmp_path, monkeypatch):
+    """A renamed Invoice_1.pdf must not then be overwritten by a genuine
+    Invoice_1.msg later in the batch."""
+    for d, name in (("a", "Invoice.msg"), ("b", "Invoice.msg"), ("c", "Invoice_1.msg")):
+        (tmp_path / d).mkdir()
+        (tmp_path / d / name).write_bytes(b"x")
+    calls = _capture_convert(monkeypatch)
+
+    result = CliRunner().invoke(cli, ["-r", str(tmp_path), "--output-dir", str(tmp_path / "out")])
+    assert result.exit_code == 0, result.output
+    dests = [c["dest"] for c in calls]
+    assert len(set(dests)) == 3, dests

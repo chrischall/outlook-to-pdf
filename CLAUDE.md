@@ -41,8 +41,10 @@ Flow inside `convert_msg_to_pdf`:
 4. `render_pdf()` renders HTML through WeasyPrint with a strict URL fetcher.
 
 `_make_url_fetcher` allowlist: `cid:` resolves from `inline_resources`,
-`data:` passes through, **everything else is blocked** (returns a 1×1 blank
-PNG) unless `allow_network=True`.
+`data:` passes through, `http(s)` passes through only with
+`allow_network=True`, and **everything else (`file:`, `ftp:`, …) is always
+blocked** (returns a 1×1 blank PNG). `convert_msg_to_pdf` renders with no
+`base_url`, so relative hrefs can't resolve to files beside the `.msg`.
 
 ## CLI surface
 
@@ -54,7 +56,7 @@ outlook-to-pdf INPUTS...
   --embed-attachments / --no-embed-attachments   (default: on)
   --extract-attachments / --no-extract-attachments
                                   Also write sidecar <input>_attachments/
-  --allow-network                 Permit http(s)/file/etc. fetches (off by default)
+  --allow-network                 Permit http(s) fetches only (off by default)
   -q/--quiet
 ```
 
@@ -113,6 +115,10 @@ write-verification, transport archetypes, testing traps) live in
 
 - **`-o/--output` is single-input only**: combining it with multiple resolved
   inputs raises `UsageError`. Use `--output-dir` for batches.
+- **Output collisions are de-duplicated, not overwritten**: two inputs that
+  map to the same PDF (e.g. `a/Invoice.msg` and `b/Invoice.msg` with
+  `--output-dir`) get `Invoice.pdf` and `Invoice_1.pdf` (sidecars follow the
+  PDF stem), with a warning on stderr. The check is case-insensitive.
 - **Network blocked by default**: tracking pixels in email bodies will be
   served a 1×1 PNG, not fetched. Pass `--allow-network` only if you trust
   the message.

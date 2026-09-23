@@ -34,6 +34,11 @@ def _expand_inputs(inputs: tuple[Path, ...], recursive: bool) -> list[Path]:
     return out
 
 
+def _dest_key(dest: Path) -> str:
+    """Identity of an output path for collision checks within one run."""
+    return str(dest.resolve()).casefold()
+
+
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument(
     "inputs",
@@ -103,17 +108,36 @@ def cli(
         raise click.UsageError("-o/--output cannot be used with multiple inputs; use --output-dir.")
 
     failures = 0
+    claimed: set[str] = set()
     for src in resolved:
+        stem = src.stem
         if output is not None:
             dest = output
         elif output_dir is not None:
-            dest = output_dir / (src.stem + ".pdf")
+            dest = output_dir / (stem + ".pdf")
         else:
             dest = src.with_suffix(".pdf")
 
+        # Two inputs can map to the same output (a/Invoice.msg and
+        # b/Invoice.msg under --output-dir). Never let a later one silently
+        # replace an earlier one's PDF or sidecar: pick a free suffix instead.
+        # Case-folded so it also holds on case-insensitive filesystems.
+        if _dest_key(dest) in claimed:
+            base, n = dest.stem, 1
+            while _dest_key(dest.with_name(f"{base}_{n}.pdf")) in claimed:
+                n += 1
+            renamed = dest.with_name(f"{base}_{n}.pdf")
+            click.echo(
+                f"warning: {src}: {dest.name} was already written in this run; "
+                f"writing {renamed.name} instead",
+                err=True,
+            )
+            dest, stem = renamed, renamed.stem
+        claimed.add(_dest_key(dest))
+
         attachments_dir: Path | None = None
         if extract_attachments:
-            attachments_dir = dest.parent / f"{src.stem}_attachments"
+            attachments_dir = dest.parent / f"{stem}_attachments"
 
         try:
             convert_msg_to_pdf(

@@ -400,6 +400,80 @@ def test_url_fetcher_allow_network_passes_through(monkeypatch):
     assert captured == ["https://example.com/img.png"]
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "FILE:///etc/passwd",
+        "ftp://example.com/secret.txt",
+        "gopher://example/",
+    ],
+)
+def test_url_fetcher_allow_network_still_blocks_non_http_schemes(monkeypatch, url):
+    """--allow-network means remote http(s) assets only. It must never open a
+    local file (or ftp etc.), or a crafted <a rel="attachment" href="file://...">
+    would embed an arbitrary local file into the PDF (fleet-audit#208)."""
+    from weasyprint.urls import URLFetcher
+
+    def boom(self, *a, **kw):
+        raise AssertionError(f"URLFetcher.fetch should not be called for {url}")
+
+    monkeypatch.setattr(URLFetcher, "fetch", boom)
+    fetch = _make_url_fetcher({}, allow_network=True)
+    assert fetch(url).read().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_url_fetcher_allow_network_restricts_underlying_protocols(monkeypatch):
+    """The passthrough fetcher itself is limited to http/https/data, so a
+    redirect from an allowed http URL to ftp:// (which urllib follows) is
+    refused too."""
+    from weasyprint.urls import URLFetcher
+
+    captured: list[object] = []
+    real_init = URLFetcher.__init__
+
+    def spy(self, *a, **kw):
+        captured.append(kw.get("allowed_protocols"))
+        real_init(self, *a, **kw)
+
+    monkeypatch.setattr(URLFetcher, "__init__", spy)
+    _make_url_fetcher({}, allow_network=True)
+    assert captured and captured[0] is not None
+    assert set(captured[0]) == {"http", "https", "data"}
+
+
+def test_render_pdf_allow_network_does_not_embed_local_files(tmp_path):
+    """End to end: an email body asking WeasyPrint to attach a local file must
+    not smuggle that file into the PDF even with allow_network=True."""
+    from pypdf import PdfReader
+
+    secret = tmp_path / "secret.txt"
+    secret.write_bytes(b"TOP-SECRET-KEY-MATERIAL")
+    parsed = ParsedEmail(
+        html_body=(
+            f'<html><head><link rel="attachment" href="{secret.as_uri()}"></head>'
+            f'<body><a rel="attachment" href="{secret.as_uri()}">x</a>'
+            '<a rel="attachment" href="secret.txt">y</a></body></html>'
+        ),
+    )
+    out = render_pdf(
+        parsed,
+        tmp_path / "out.pdf",
+        base_url=str(tmp_path),
+        embed_attachments=False,
+        allow_network=True,
+    )
+    reader = PdfReader(str(out))
+    embedded: list[bytes] = [d for datas in reader.attachments.values() for d in datas]
+    # WeasyPrint turns <a rel="attachment"> into a /FileAttachment annotation.
+    for page in reader.pages:
+        for annot in page.get("/Annots") or []:
+            fs = annot.get_object().get("/FS")
+            if fs is not None:
+                embedded.append(fs.get_object()["/EF"]["/F"].get_object().get_data())
+    assert not any(b"TOP-SECRET" in d for d in embedded)
+
+
 def test_url_fetcher_strips_wrapped_cid_brackets():
     fetch = _make_url_fetcher(
         {"abc@x": (b"REAL", "image/png", "p.png")}, allow_network=False
