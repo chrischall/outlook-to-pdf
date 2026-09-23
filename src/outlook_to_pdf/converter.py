@@ -248,6 +248,10 @@ _BLANK_PNG = bytes.fromhex(
 )
 
 
+_NETWORK_SCHEMES = frozenset({"http", "https"})
+_PASSTHROUGH_SCHEMES = frozenset({"data"}) | _NETWORK_SCHEMES
+
+
 def _make_url_fetcher(
     inline_resources: dict[str, tuple[bytes, str, str]],
     *,
@@ -257,8 +261,11 @@ def _make_url_fetcher(
 
     - ``cid:`` URLs resolve from ``inline_resources`` (never the network).
     - ``data:`` URLs are passed through (fully self-contained).
-    - Everything else — ``http(s)``, ``ftp``, ``file``, ``about``, etc. — is
-      blocked unless ``allow_network`` is True.
+    - ``http`` / ``https`` pass through only when ``allow_network`` is True.
+    - Everything else — ``ftp``, ``file``, ``about``, etc. — is always
+      blocked, even with ``allow_network``: a crafted
+      ``<a rel="attachment" href="file:///...">`` would otherwise embed an
+      arbitrary local file into the PDF.
 
     Blocking is the default because email bodies routinely contain tracking
     pixels (http leak), `<img src="file:///etc/passwd">` style probes
@@ -267,7 +274,9 @@ def _make_url_fetcher(
     """
     from weasyprint.urls import URLFetcher, URLFetcherResponse
 
-    passthrough = URLFetcher()
+    # Restricting the underlying fetcher too means an allowed http URL that
+    # redirects to ftp:// (urllib follows those) is refused as well.
+    passthrough = URLFetcher(allowed_protocols=_PASSTHROUGH_SCHEMES)
 
     def _blank_png_response(url: str) -> "URLFetcherResponse":
         return URLFetcherResponse(url, body=_BLANK_PNG, headers={"Content-Type": "image/png"})
@@ -287,7 +296,8 @@ def _make_url_fetcher(
             data, mime, _name = entry
             return URLFetcherResponse(url, body=data, headers={"Content-Type": mime or "application/octet-stream"})
 
-        if url.startswith("data:") or allow_network:
+        scheme = url.split(":", 1)[0].lower() if ":" in url else ""
+        if scheme == "data" or (allow_network and scheme in _NETWORK_SCHEMES):
             return passthrough.fetch(url)
 
         return _blank_png_response(url)
@@ -394,7 +404,9 @@ def convert_msg_to_pdf(
     return render_pdf(
         parsed,
         pdf_path,
-        base_url=str(msg_path.parent),
+        # No base_url: relative hrefs in the body must not resolve to files
+        # next to the .msg on disk.
+        base_url=None,
         embed_attachments=embed_attachments,
         allow_network=allow_network,
     )
