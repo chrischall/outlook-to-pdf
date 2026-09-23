@@ -115,6 +115,10 @@ write-verification, transport archetypes, testing traps) live in
 
 - **`-o/--output` is single-input only**: combining it with multiple resolved
   inputs raises `UsageError`. Use `--output-dir` for batches.
+- **Output collisions are de-duplicated, not overwritten**: two inputs that
+  map to the same PDF (e.g. `a/Invoice.msg` and `b/Invoice.msg` with
+  `--output-dir`) get `Invoice.pdf` and `Invoice_1.pdf` (sidecars follow the
+  PDF stem), with a warning on stderr. The check is case-insensitive.
 - **Network blocked by default**: tracking pixels in email bodies will be
   served a 1×1 PNG, not fetched. Pass `--allow-network` only if you trust
   the message.
