@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.8](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.7...v0.1.8) (2026-09-23)
+
+
+### Bug Fixes
+
+* block local-file reads under --allow-network and stop batch output overwrites ([#52](https://github.com/chrischall/outlook-to-pdf/issues/52)) ([b788043](https://github.com/chrischall/outlook-to-pdf/commit/b788043010e2f259123f2e0fcc713e1e6dec2b19))
+
 ## [0.1.7](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.6...v0.1.7) (2026-09-18)
 
 
