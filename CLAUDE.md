@@ -135,10 +135,9 @@ write-verification, transport archetypes, testing traps) live in
   `filterwarnings`). Bumping `extract-msg`/`weasyprint` may surface new ones.
 - **CI**: `.github/workflows/` has ci, pr-auto-review, auto-merge, claude, and
   release-please workflows. `pr-auto-review.yml` and `auto-merge.yml` are thin
-  stubs that call `chrischall/workflows` reusable pipelines. A `pass` or `warn`
-  auto-review verdict arms `ready-to-merge` and the PR squash-merges once CI is
-  green; `warn`/`fail` also open an `auto-review-followup` issue, and only
-  `fail` blocks the merge (see *Auto-review follow-up issues*).
+  stubs that call `chrischall/workflows` reusable pipelines. The merge ladder
+  and auto-review follow-up issues are fleet policy — see `~/.claude/CLAUDE.md`
+  (and *Pull requests & release notes* above).
 - **Versioning**: release-please owns version bumps and tags. The version lives
   in `pyproject.toml` (`version`) and `.release-please-manifest.json`, kept in
   sync by release-please's `python` release-type. Don't bump by hand or cut
