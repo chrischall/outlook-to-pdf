@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.10](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.9...v0.1.10) (2026-10-03)
+
+
+### Bug Fixes
+
+* **deps-dev:** bump pypdf from 6.16.1 to 6.19.0 ([#57](https://github.com/chrischall/outlook-to-pdf/issues/57)) ([1c19b5c](https://github.com/chrischall/outlook-to-pdf/commit/1c19b5c63d389f743afe37bb4bc1f11827bdb5de))
+
 ## [0.1.9](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.8...v0.1.9) (2026-10-03)
 
 
