@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.9](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.8...v0.1.9) (2026-10-03)
+
+
+### Documentation
+
+* point the CI note's merge-ladder text at the fleet policy file ([#55](https://github.com/chrischall/outlook-to-pdf/issues/55)) ([699d100](https://github.com/chrischall/outlook-to-pdf/commit/699d100420d7cd35b4f4d85fb9e7bd13e624a998))
+
 ## [0.1.8](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.7...v0.1.8) (2026-09-23)
 
 
