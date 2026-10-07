@@ -9,7 +9,7 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 dependencies = [
     "click>=8.3.3",
-    "extract-msg>=0.55.0",
+    "extract-msg>=0.56.1",
     "weasyprint>=68.1",
 ]
 
@@ -17,7 +17,7 @@ dependencies = [
 outlook-to-pdf = "outlook_to_pdf:main"
 
 [build-system]
-requires = ["uv_build>=0.11.14,<0.12.0"]
+requires = ["uv_build>=0.11.14,<0.13.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
