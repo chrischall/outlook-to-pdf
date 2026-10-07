@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.11](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.10...v0.1.11) (2026-10-07)
+
+
+### Bug Fixes
+
+* **deps:** update extract-msg to 0.56 and the uv toolchain ([#59](https://github.com/chrischall/outlook-to-pdf/issues/59)) ([6b81cf9](https://github.com/chrischall/outlook-to-pdf/commit/6b81cf97d5441d929937548ed6a4256d4073c61e))
+
 ## [0.1.10](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.9...v0.1.10) (2026-10-03)
 
 
