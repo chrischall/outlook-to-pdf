@@ -75,14 +75,37 @@ def _coerce_str(value: object) -> str | None:
     if value is None:
         return None
     if isinstance(value, bytes):
-        for enc in ("utf-8", "cp1252", "latin-1"):
+        for enc in ("utf-8", "cp1252"):
             try:
                 return value.decode(enc)
             except UnicodeDecodeError:
                 continue
-        return value.decode("utf-8", errors="replace")
+        # latin-1 maps every byte, so it is the terminal fallback.
+        return value.decode("latin-1")
     s = str(value).strip()
     return s or None
+
+
+# <meta charset="x"> or <meta http-equiv="Content-Type" content="...; charset=x">
+_META_CHARSET_RE = re.compile(rb"""<meta\b[^>]*?charset\s*=\s*["']?\s*([A-Za-z0-9._:-]+)""", re.IGNORECASE)
+
+
+def _decode_html(value: object) -> str | None:
+    """Decode an HTML body, honouring its declared ``<meta>`` charset.
+
+    Falls back to :func:`_coerce_str`'s utf-8 / cp1252 / latin-1 chain when
+    no charset is declared, the codec is unknown, or the bytes don't match it.
+    """
+    if isinstance(value, (bytearray, memoryview)):
+        value = bytes(value)
+    if isinstance(value, bytes):
+        m = _META_CHARSET_RE.search(value[:4096])
+        if m:
+            try:
+                return value.decode(m.group(1).decode("ascii"))
+            except (LookupError, UnicodeDecodeError):
+                pass
+    return _coerce_str(value)
 
 
 def _format_date(value: object) -> str | None:
@@ -141,7 +164,7 @@ def parse_message(msg: _MessageLike) -> ParsedEmail:
       - ``embedded_files`` — (name, bytes) for PDF /EmbeddedFiles
       - ``inline_resources`` — CID -> (bytes, mime, name) for cid: URL resolution
     """
-    html_body = _coerce_str(msg.htmlBody) if msg.htmlBody else None
+    html_body = _decode_html(msg.htmlBody) if msg.htmlBody else None
     # Lower-cased: the cid: url fetcher matches case-insensitively, so the
     # "purely inline?" check must agree with it.
     haystack = (html_body or "").lower()
@@ -195,9 +218,23 @@ def parse_message(msg: _MessageLike) -> ParsedEmail:
 _HTML_BODY_RE = re.compile(r"<body\b[^>]*>(.*?)</body>", re.IGNORECASE | re.DOTALL)
 
 
+_HTML_BODY_OPEN_RE = re.compile(r"<body\b", re.IGNORECASE)
+_STYLE_RE = re.compile(r"<style\b[^>]*>(.*?)</style\s*>", re.IGNORECASE | re.DOTALL)
+
+
 def _extract_body_inner(html: str) -> str:
     m = _HTML_BODY_RE.search(html)
     return m.group(1) if m else html
+
+
+def _extract_head_styles(html: str) -> list[str]:
+    """CSS from ``<style>`` blocks before ``<body>`` — where Outlook and most
+    marketing mail keep their layout CSS. Styles inside the body survive body
+    extraction on their own."""
+    m = _HTML_BODY_OPEN_RE.search(html)
+    if not m:
+        return []
+    return [css for css in _STYLE_RE.findall(html[: m.start()]) if css.strip()]
 
 
 def _text_to_html(text: str) -> str:
@@ -238,8 +275,10 @@ def render_html(parsed: ParsedEmail) -> str:
     add("Bcc", parsed.bcc)
     add("Date", parsed.date_display)
 
+    email_css: list[str] = []
     if parsed.html_body:
         body_html = _extract_body_inner(parsed.html_body)
+        email_css = _extract_head_styles(parsed.html_body)
     else:
         body_html = _text_to_html(parsed.text_body)
 
@@ -269,7 +308,9 @@ def render_html(parsed: ParsedEmail) -> str:
         "<!DOCTYPE html>\n"
         '<html><head><meta charset="utf-8">\n'
         f"<title>{escape(parsed.subject)}</title>\n"
-        f"<style>{_HEADER_CSS}</style>\n"
+        # Email CSS first so our header styling wins on equal specificity.
+        + "".join(f"<style>{css}</style>\n" for css in email_css)
+        + f"<style>{_HEADER_CSS}</style>\n"
         "</head><body>\n"
         '<header class="meta">\n'
         f"  <h1>{escape(parsed.subject)}</h1>\n"

@@ -697,3 +697,56 @@ def test_render_html_marks_attachments_that_were_not_embedded():
     ))
     assert "<li>ok.txt</li>" in out
     assert "<li>broken.msg <em>(not embedded" in out
+
+
+# --------------------------- HTML head styles / declared charset ---------------------------
+
+
+def test_parse_honours_meta_charset_for_html_body():
+    text = "会議の議事録"
+    html = f'<html><head><meta charset="shift_jis"></head><body><p>{text}</p></body></html>'
+    parsed = parse_message(FakeMessage(htmlBody=html.encode("shift_jis")))
+    assert text in parsed.html_body
+
+
+def test_parse_honours_http_equiv_charset_for_html_body():
+    text = "Привет, мир"
+    html = (
+        '<html><head><meta http-equiv="Content-Type" content="text/html; charset=koi8-r">'
+        f"</head><body>{text}</body></html>"
+    )
+    parsed = parse_message(FakeMessage(htmlBody=html.encode("koi8-r")))
+    assert text in parsed.html_body
+
+
+def test_parse_ignores_unknown_or_wrong_declared_charset():
+    html = '<meta charset="no-such-codec"><p>caf\xe9</p>'
+    parsed = parse_message(FakeMessage(htmlBody=html.encode("cp1252")))
+    assert "café" in parsed.html_body
+    # Declared utf-8 but actually cp1252: fall back rather than mojibake/raise.
+    raw = b'<meta charset="utf-8"><p>\x93hi\x94</p>'
+    parsed = parse_message(FakeMessage(htmlBody=raw))
+    assert "“hi”" in parsed.html_body
+
+
+def test_render_html_keeps_email_head_styles():
+    html = (
+        "<html><head><style>.promo { color: #c00; }</style>"
+        '<style type="text/css"><!-- p.MsoNormal { margin: 0; } --></style>'
+        '</head><body><p class="promo">Sale</p></body></html>'
+    )
+    out = render_html(ParsedEmail(html_body=html))
+    head = out.split("<body>", 1)[0]
+    assert ".promo { color: #c00; }" in head
+    assert "p.MsoNormal { margin: 0; }" in head
+    # The body content is still extracted once.
+    assert out.count('<p class="promo">Sale</p>') == 1
+
+
+def test_render_html_email_styles_precede_header_css():
+    # Our header/meta styling is declared last so equal-specificity email
+    # rules (e.g. a bare ``h1``) can't restyle the generated header.
+    html = "<html><head><style>h1 { font-size: 40pt; }</style></head><body>x</body></html>"
+    out = render_html(ParsedEmail(html_body=html))
+    assert out.index("h1 { font-size: 40pt; }") < out.index(".meta h1")
+
