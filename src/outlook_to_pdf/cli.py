@@ -13,6 +13,8 @@ def _expand_inputs(inputs: tuple[Path, ...], recursive: bool) -> list[Path]:
 
     - A file is kept as-is (whatever its extension — caller asked for it).
     - A directory is scanned for *.msg children (recursively if requested).
+      The suffix match is case-insensitive: Windows/Outlook exports are
+      often named ``Foo.MSG``.
     - Results are de-duplicated while preserving order.
     """
     pattern = "**/*.msg" if recursive else "*.msg"
@@ -20,7 +22,7 @@ def _expand_inputs(inputs: tuple[Path, ...], recursive: bool) -> list[Path]:
     out: list[Path] = []
     for p in inputs:
         if p.is_dir():
-            for child in sorted(p.glob(pattern)):
+            for child in sorted(p.glob(pattern, case_sensitive=False)):
                 if child.is_file():
                     rp = child.resolve()
                     if rp not in seen:

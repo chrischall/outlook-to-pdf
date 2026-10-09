@@ -288,3 +288,21 @@ def test_cli_dedup_suffix_does_not_clash_with_real_input(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     dests = [c["dest"] for c in calls]
     assert len(set(dests)) == 3, dests
+
+
+def test_expand_inputs_matches_msg_suffix_case_insensitively(tmp_path):
+    from outlook_to_pdf.cli import _expand_inputs
+
+    (tmp_path / "X.MSG").write_bytes(b"")
+    (tmp_path / "y.msg").write_bytes(b"")
+    (tmp_path / "z.Msg").write_bytes(b"")
+    (tmp_path / "notes.txt").write_text("ignore")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "DEEP.MSG").write_bytes(b"")
+
+    flat = sorted(p.name for p in _expand_inputs((tmp_path,), recursive=False))
+    assert flat == ["X.MSG", "y.msg", "z.Msg"]
+
+    deep = sorted(p.name for p in _expand_inputs((tmp_path,), recursive=True))
+    assert deep == ["DEEP.MSG", "X.MSG", "y.msg", "z.Msg"]
