@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.12](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.11...v0.1.12) (2026-10-09)
+
+
+### Bug Fixes
+
+* **deps:** bump the uv-dependencies group with 2 updates ([#64](https://github.com/chrischall/outlook-to-pdf/issues/64)) ([b109f63](https://github.com/chrischall/outlook-to-pdf/commit/b109f63578074ccc98c6160c001ec50b7c33374e))
+* resolve low-severity audit findings ([#61](https://github.com/chrischall/outlook-to-pdf/issues/61)) ([0f8d1c6](https://github.com/chrischall/outlook-to-pdf/commit/0f8d1c6d0d47a5ccd15dde76c01bdc240a6bb165))
+
 ## [0.1.11](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.10...v0.1.11) (2026-10-07)
 
 
