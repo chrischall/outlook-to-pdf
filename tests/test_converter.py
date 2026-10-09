@@ -622,3 +622,78 @@ def test_convert_writes_pdf_even_if_sidecar_extraction_fails(tmp_path, monkeypat
     with pytest.raises(OSError):
         convert_msg_to_pdf(SAMPLE_MSG, out, extract_attachments_to=tmp_path / "side")
     assert out.exists() and out.read_bytes()[:4] == b"%PDF"
+
+
+# --------------------------- attached messages / data-less attachments ---------------------------
+
+
+class FakeEmbeddedMsg:
+    """Quacks like the extract_msg Message an EmbeddedMsgAttachment exposes as .data."""
+
+    def __init__(self, payload: bytes = b"\xd0\xcf\x11\xe0MSG", fail: int = 0):
+        self.payload = payload
+        self.fail = fail
+        self.calls: list[bool] = []
+
+    def exportBytes(self, allowBadEmbed: bool = False) -> bytes:
+        self.calls.append(allowBadEmbed)
+        if len(self.calls) <= self.fail:
+            raise ValueError("bad embed")
+        return self.payload
+
+
+@dataclass
+class FakeObjAttachment:
+    longFilename: str | None = None
+    cid: str | None = None
+    mimetype: str | None = None
+    data: object = None
+
+
+def test_parse_embeds_attached_message_as_msg_file():
+    inner = FakeEmbeddedMsg()
+    parsed = parse_message(FakeMessage(attachments=[
+        FakeObjAttachment(longFilename="Fwd: Budget", data=inner),
+    ]))
+    assert parsed.attachments == ["Fwd: Budget.msg"]
+    assert parsed.embedded_files == [("Fwd: Budget.msg", inner.payload)]
+    assert parsed.not_embedded == []
+
+
+def test_parse_keeps_existing_msg_extension_for_attached_message():
+    parsed = parse_message(FakeMessage(attachments=[
+        FakeObjAttachment(longFilename="thread.MSG", data=FakeEmbeddedMsg()),
+    ]))
+    assert [n for n, _ in parsed.embedded_files] == ["thread.MSG"]
+
+
+def test_parse_retries_attached_message_export_with_allow_bad_embed():
+    inner = FakeEmbeddedMsg(fail=1)
+    parsed = parse_message(FakeMessage(attachments=[
+        FakeObjAttachment(longFilename="old.msg", data=inner),
+    ]))
+    assert inner.calls == [False, True]
+    assert parsed.embedded_files == [("old.msg", inner.payload)]
+
+
+def test_parse_flags_attachments_without_data(caplog):
+    inner = FakeEmbeddedMsg(fail=2)
+    with caplog.at_level("WARNING", logger="outlook_to_pdf.converter"):
+        parsed = parse_message(FakeMessage(attachments=[
+            FakeObjAttachment(longFilename="broken.msg", data=inner),
+            FakeObjAttachment(longFilename="https link", data=None),
+            FakeObjAttachment(longFilename="ok.txt", data=b"ok"),
+        ]))
+    assert parsed.embedded_files == [("ok.txt", b"ok")]
+    assert parsed.not_embedded == ["broken.msg", "https link"]
+    assert "broken.msg" in caplog.text and "https link" in caplog.text
+
+
+def test_render_html_marks_attachments_that_were_not_embedded():
+    out = render_html(ParsedEmail(
+        attachments=["ok.txt", "broken.msg"],
+        not_embedded=["broken.msg"],
+        attachments_embedded=True,
+    ))
+    assert "<li>ok.txt</li>" in out
+    assert "<li>broken.msg <em>(not embedded" in out

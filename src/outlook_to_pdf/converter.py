@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import os
 import re
 import sys
@@ -8,6 +9,8 @@ from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+_log = logging.getLogger(__name__)
 
 
 def _ensure_macos_native_libs() -> None:
@@ -62,6 +65,9 @@ class ParsedEmail:
     embedded_files: list[tuple[str, bytes]] = field(default_factory=list)
     # CID -> (bytes, mime, original_name) for inline-image resolution + sidecar.
     inline_resources: dict[str, tuple[bytes, str, str]] = field(default_factory=dict)
+    # Visible attachment names whose content could not be read (web links,
+    # broken attached messages) — listed, but neither embedded nor extracted.
+    not_embedded: list[str] = field(default_factory=list)
     attachments_embedded: bool = False
 
 
@@ -107,6 +113,26 @@ def _normalize_cid(value: object) -> str | None:
     return s.strip("<>").strip() or None
 
 
+def _attachment_bytes(raw_data: object) -> bytes | None:
+    """Bytes for an attachment's ``.data``, or None if it has no content.
+
+    An attached email (extract_msg ``EmbeddedMsgAttachment``) exposes a parsed
+    Message rather than bytes; serialise it back to a standalone .msg.
+    """
+    if isinstance(raw_data, (bytes, bytearray, memoryview)):
+        return bytes(raw_data)
+    export = getattr(raw_data, "exportBytes", None)
+    if callable(export):
+        for allow_bad in (False, True):
+            try:
+                out = export(allowBadEmbed=allow_bad)
+            except Exception:  # noqa: BLE001 — any failure means "try harder / give up"
+                continue
+            if isinstance(out, (bytes, bytearray, memoryview)):
+                return bytes(out)
+    return None
+
+
 def parse_message(msg: _MessageLike) -> ParsedEmail:
     """Read a Message-like object into a ParsedEmail.
 
@@ -123,13 +149,18 @@ def parse_message(msg: _MessageLike) -> ParsedEmail:
     attachments: list[str] = []
     embedded: list[tuple[str, bytes]] = []
     inline: dict[str, tuple[bytes, str, str]] = {}
+    not_embedded: list[str] = []
 
     for att in (msg.attachments or []):
         name = _attachment_name(att)
         cid = _normalize_cid(getattr(att, "cid", None) or getattr(att, "contentId", None))
         mime = _coerce_str(getattr(att, "mimetype", None)) or "application/octet-stream"
         raw_data = getattr(att, "data", None)
-        raw = bytes(raw_data) if isinstance(raw_data, (bytes, bytearray, memoryview)) else None
+        raw = _attachment_bytes(raw_data)
+        if raw is not None and not isinstance(raw_data, (bytes, bytearray, memoryview)):
+            # Attached message serialised to .msg — make the name say so.
+            if not name.lower().endswith(".msg"):
+                name = f"{name}.msg"
 
         if cid and raw is not None:
             inline[cid] = (raw, mime, name)
@@ -141,6 +172,9 @@ def parse_message(msg: _MessageLike) -> ParsedEmail:
         attachments.append(name)
         if raw is not None:
             embedded.append((name, raw))
+        else:
+            not_embedded.append(name)
+            _log.warning("attachment %r has no readable content; it is listed but not embedded", name)
 
     return ParsedEmail(
         subject=_coerce_str(msg.subject) or "(no subject)",
@@ -154,6 +188,7 @@ def parse_message(msg: _MessageLike) -> ParsedEmail:
         attachments=attachments,
         embedded_files=embedded,
         inline_resources=inline,
+        not_embedded=not_embedded,
     )
 
 
@@ -210,7 +245,13 @@ def render_html(parsed: ParsedEmail) -> str:
 
     attachments_html = ""
     if parsed.attachments:
-        items = "\n".join(f"    <li>{escape(name)}</li>" for name in parsed.attachments)
+        missing = set(parsed.not_embedded)
+
+        def item(name: str) -> str:
+            flag = " <em>(not embedded &mdash; no readable content)</em>" if name in missing else ""
+            return f"    <li>{escape(name)}{flag}</li>"
+
+        items = "\n".join(item(name) for name in parsed.attachments)
         note = (
             " &mdash; embedded in this PDF; open the attachments panel in your "
             "PDF viewer (Preview sidebar, Acrobat paperclip) to save them out"
