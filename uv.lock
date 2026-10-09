@@ -379,7 +379,7 @@ wheels = [
 
 [[package]]
 name = "outlook-to-pdf"
-version = "0.1.10"
+version = "0.1.11"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -397,7 +397,7 @@ dev = [
 requires-dist = [
     { name = "click", specifier = ">=8.3.3" },
     { name = "extract-msg", specifier = ">=0.56.1" },
-    { name = "weasyprint", specifier = ">=68.1" },
+    { name = "weasyprint", specifier = ">=69.0" },
 ]
 
 [package.metadata.requires-dev]
