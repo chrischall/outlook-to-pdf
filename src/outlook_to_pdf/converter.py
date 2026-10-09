@@ -116,7 +116,9 @@ def parse_message(msg: _MessageLike) -> ParsedEmail:
       - ``inline_resources`` — CID -> (bytes, mime, name) for cid: URL resolution
     """
     html_body = _coerce_str(msg.htmlBody) if msg.htmlBody else None
-    haystack = html_body or ""
+    # Lower-cased: the cid: url fetcher matches case-insensitively, so the
+    # "purely inline?" check must agree with it.
+    haystack = (html_body or "").lower()
 
     attachments: list[str] = []
     embedded: list[tuple[str, bytes]] = []
@@ -133,7 +135,7 @@ def parse_message(msg: _MessageLike) -> ParsedEmail:
             inline[cid] = (raw, mime, name)
 
         # Purely inline images live in inline_resources only — no double-listing.
-        if cid and f"cid:{cid}" in haystack:
+        if cid and f"cid:{cid.lower()}" in haystack:
             continue
 
         attachments.append(name)
@@ -344,6 +346,25 @@ def render_pdf(
 
 _UNSAFE_FILENAME_RE = re.compile(r"[\x00-\x1f/\\:]")
 
+# Most filesystems cap a name at 255 bytes; stay well under so the collision
+# suffix (``_12``) still fits.
+_MAX_FILENAME_BYTES = 200
+_MAX_EXT_BYTES = 20
+
+
+def _truncate_utf8(text: str, limit: int) -> str:
+    return text.encode("utf-8")[:limit].decode("utf-8", errors="ignore")
+
+
+def _truncate_filename(name: str) -> str:
+    if len(name.encode("utf-8")) <= _MAX_FILENAME_BYTES:
+        return name
+    stem, dot, ext = name.rpartition(".")
+    if not dot or not stem or len(ext.encode("utf-8")) > _MAX_EXT_BYTES:
+        return _truncate_utf8(name, _MAX_FILENAME_BYTES)
+    suffix = "." + ext
+    return _truncate_utf8(stem, _MAX_FILENAME_BYTES - len(suffix.encode("utf-8"))) + suffix
+
 
 def _sanitize_filename(name: str) -> str:
     """Reduce ``name`` to a safe basename suitable for writing to disk.
@@ -351,13 +372,15 @@ def _sanitize_filename(name: str) -> str:
     Strips directory components, control chars, and platform-specific path
     separators / drive-letter colons. The attachment filenames in a .msg are
     attacker-controlled, so this guards the sidecar extraction path against
-    traversal (`../../etc/passwd`) and NUL-byte tricks.
+    traversal (`../../etc/passwd`) and NUL-byte tricks, and truncates
+    over-long names (keeping the extension) so ``write_bytes`` can't fail
+    with ENAMETOOLONG.
     """
     # Normalize Windows separators on non-Windows hosts so we still split.
     normalized = name.replace("\\", "/")
     base = os.path.basename(normalized).strip().lstrip(".")
     safe = _UNSAFE_FILENAME_RE.sub("_", base)
-    return safe or "attachment.bin"
+    return _truncate_filename(safe) if safe else "attachment.bin"
 
 
 def _extract_attachments_to_disk(parsed: ParsedEmail, target: str | Path) -> None:
@@ -376,9 +399,15 @@ def _extract_attachments_to_disk(parsed: ParsedEmail, target: str | Path) -> Non
         used.add(candidate)
         (target / candidate).write_bytes(data)
 
+    written: set[tuple[str, bytes]] = set()
     for name, data in parsed.embedded_files:
         _write(name, data)
+        written.add((name, data))
     for _cid, (data, _mime, name) in parsed.inline_resources.items():
+        # A CID attachment the body never references is also a visible
+        # embedded file — it was already written above.
+        if (name, data) in written:
+            continue
         _write(name, data)
 
 
@@ -398,10 +427,9 @@ def convert_msg_to_pdf(
     with extract_msg.openMsg(str(msg_path)) as msg:
         parsed = parse_message(msg)
 
-    if extract_attachments_to is not None:
-        _extract_attachments_to_disk(parsed, extract_attachments_to)
-
-    return render_pdf(
+    # Render first: a sidecar write failure (odd attachment name, full disk)
+    # must not cost the user the PDF itself.
+    result = render_pdf(
         parsed,
         pdf_path,
         # No base_url: relative hrefs in the body must not resolve to files
@@ -410,3 +438,8 @@ def convert_msg_to_pdf(
         embed_attachments=embed_attachments,
         allow_network=allow_network,
     )
+
+    if extract_attachments_to is not None:
+        _extract_attachments_to_disk(parsed, extract_attachments_to)
+
+    return result

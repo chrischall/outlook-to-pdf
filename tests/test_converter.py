@@ -557,3 +557,68 @@ def test_convert_real_msg_produces_valid_pdf(tmp_path):
     assert result == out
     assert out.stat().st_size > 1000
     assert out.read_bytes()[:4] == b"%PDF"
+
+
+# --------------------------- sidecar extraction edge cases ---------------------------
+
+
+def test_parse_inline_reference_check_is_case_insensitive():
+    # The url fetcher resolves cid: case-insensitively, so the "is it purely
+    # inline?" check must too — otherwise the image is also listed/embedded.
+    parsed = parse_message(FakeMessage(
+        htmlBody=b'<img src="cid:LOGO@X">',
+        attachments=[
+            FakeAttachment(longFilename="logo.png", data=b"PNG", cid="logo@x", mimetype="image/png"),
+        ],
+    ))
+    assert parsed.attachments == []
+    assert parsed.embedded_files == []
+    assert "logo@x" in parsed.inline_resources
+
+
+def test_extract_does_not_duplicate_unreferenced_cid_attachment(tmp_path):
+    parsed = parse_message(FakeMessage(
+        htmlBody=b"<p>no images here</p>",
+        attachments=[
+            FakeAttachment(longFilename="orphan.png", data=b"PNG3", cid="orphan@x", mimetype="image/png"),
+        ],
+    ))
+    target = tmp_path / "side"
+    _extract_attachments_to_disk(parsed, target)
+    assert sorted(p.name for p in target.iterdir()) == ["orphan.png"]
+
+
+def test_sanitize_filename_truncates_overlong_names_keeping_extension():
+    raw = ("é" * 300) + ".pdf"
+    safe = _sanitize_filename(raw)
+    assert safe.endswith(".pdf")
+    assert len(safe.encode("utf-8")) <= 200
+    # Truncation never splits a multi-byte character.
+    safe.encode("utf-8").decode("utf-8")
+
+
+def test_extract_attachments_to_disk_handles_overlong_names(tmp_path):
+    parsed = ParsedEmail(embedded_files=[
+        ("a" * 400 + ".txt", b"one"),
+        ("a" * 400 + ".txt", b"two"),
+    ])
+    target = tmp_path / "side"
+    _extract_attachments_to_disk(parsed, target)
+    files = sorted(target.iterdir())
+    assert len(files) == 2
+    assert all(f.suffix == ".txt" for f in files)
+    assert {f.read_bytes() for f in files} == {b"one", b"two"}
+
+
+@pytest.mark.skipif(not SAMPLE_MSG.exists(), reason="sample .msg fixture missing")
+def test_convert_writes_pdf_even_if_sidecar_extraction_fails(tmp_path, monkeypatch):
+    import outlook_to_pdf.converter as conv
+
+    def boom(parsed, target):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(conv, "_extract_attachments_to_disk", boom)
+    out = tmp_path / "out.pdf"
+    with pytest.raises(OSError):
+        convert_msg_to_pdf(SAMPLE_MSG, out, extract_attachments_to=tmp_path / "side")
+    assert out.exists() and out.read_bytes()[:4] == b"%PDF"
