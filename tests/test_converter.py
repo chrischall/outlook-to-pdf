@@ -557,3 +557,196 @@ def test_convert_real_msg_produces_valid_pdf(tmp_path):
     assert result == out
     assert out.stat().st_size > 1000
     assert out.read_bytes()[:4] == b"%PDF"
+
+
+# --------------------------- sidecar extraction edge cases ---------------------------
+
+
+def test_parse_inline_reference_check_is_case_insensitive():
+    # The url fetcher resolves cid: case-insensitively, so the "is it purely
+    # inline?" check must too — otherwise the image is also listed/embedded.
+    parsed = parse_message(FakeMessage(
+        htmlBody=b'<img src="cid:LOGO@X">',
+        attachments=[
+            FakeAttachment(longFilename="logo.png", data=b"PNG", cid="logo@x", mimetype="image/png"),
+        ],
+    ))
+    assert parsed.attachments == []
+    assert parsed.embedded_files == []
+    assert "logo@x" in parsed.inline_resources
+
+
+def test_extract_does_not_duplicate_unreferenced_cid_attachment(tmp_path):
+    parsed = parse_message(FakeMessage(
+        htmlBody=b"<p>no images here</p>",
+        attachments=[
+            FakeAttachment(longFilename="orphan.png", data=b"PNG3", cid="orphan@x", mimetype="image/png"),
+        ],
+    ))
+    target = tmp_path / "side"
+    _extract_attachments_to_disk(parsed, target)
+    assert sorted(p.name for p in target.iterdir()) == ["orphan.png"]
+
+
+def test_sanitize_filename_truncates_overlong_names_keeping_extension():
+    raw = ("é" * 300) + ".pdf"
+    safe = _sanitize_filename(raw)
+    assert safe.endswith(".pdf")
+    assert len(safe.encode("utf-8")) <= 200
+    # Truncation never splits a multi-byte character.
+    safe.encode("utf-8").decode("utf-8")
+
+
+def test_extract_attachments_to_disk_handles_overlong_names(tmp_path):
+    parsed = ParsedEmail(embedded_files=[
+        ("a" * 400 + ".txt", b"one"),
+        ("a" * 400 + ".txt", b"two"),
+    ])
+    target = tmp_path / "side"
+    _extract_attachments_to_disk(parsed, target)
+    files = sorted(target.iterdir())
+    assert len(files) == 2
+    assert all(f.suffix == ".txt" for f in files)
+    assert {f.read_bytes() for f in files} == {b"one", b"two"}
+
+
+@pytest.mark.skipif(not SAMPLE_MSG.exists(), reason="sample .msg fixture missing")
+def test_convert_writes_pdf_even_if_sidecar_extraction_fails(tmp_path, monkeypatch):
+    import outlook_to_pdf.converter as conv
+
+    def boom(parsed, target):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(conv, "_extract_attachments_to_disk", boom)
+    out = tmp_path / "out.pdf"
+    with pytest.raises(OSError):
+        convert_msg_to_pdf(SAMPLE_MSG, out, extract_attachments_to=tmp_path / "side")
+    assert out.exists() and out.read_bytes()[:4] == b"%PDF"
+
+
+# --------------------------- attached messages / data-less attachments ---------------------------
+
+
+class FakeEmbeddedMsg:
+    """Quacks like the extract_msg Message an EmbeddedMsgAttachment exposes as .data."""
+
+    def __init__(self, payload: bytes = b"\xd0\xcf\x11\xe0MSG", fail: int = 0):
+        self.payload = payload
+        self.fail = fail
+        self.calls: list[bool] = []
+
+    def exportBytes(self, allowBadEmbed: bool = False) -> bytes:
+        self.calls.append(allowBadEmbed)
+        if len(self.calls) <= self.fail:
+            raise ValueError("bad embed")
+        return self.payload
+
+
+@dataclass
+class FakeObjAttachment:
+    longFilename: str | None = None
+    cid: str | None = None
+    mimetype: str | None = None
+    data: object = None
+
+
+def test_parse_embeds_attached_message_as_msg_file():
+    inner = FakeEmbeddedMsg()
+    parsed = parse_message(FakeMessage(attachments=[
+        FakeObjAttachment(longFilename="Fwd: Budget", data=inner),
+    ]))
+    assert parsed.attachments == ["Fwd: Budget.msg"]
+    assert parsed.embedded_files == [("Fwd: Budget.msg", inner.payload)]
+    assert parsed.not_embedded == []
+
+
+def test_parse_keeps_existing_msg_extension_for_attached_message():
+    parsed = parse_message(FakeMessage(attachments=[
+        FakeObjAttachment(longFilename="thread.MSG", data=FakeEmbeddedMsg()),
+    ]))
+    assert [n for n, _ in parsed.embedded_files] == ["thread.MSG"]
+
+
+def test_parse_retries_attached_message_export_with_allow_bad_embed():
+    inner = FakeEmbeddedMsg(fail=1)
+    parsed = parse_message(FakeMessage(attachments=[
+        FakeObjAttachment(longFilename="old.msg", data=inner),
+    ]))
+    assert inner.calls == [False, True]
+    assert parsed.embedded_files == [("old.msg", inner.payload)]
+
+
+def test_parse_flags_attachments_without_data(caplog):
+    inner = FakeEmbeddedMsg(fail=2)
+    with caplog.at_level("WARNING", logger="outlook_to_pdf.converter"):
+        parsed = parse_message(FakeMessage(attachments=[
+            FakeObjAttachment(longFilename="broken.msg", data=inner),
+            FakeObjAttachment(longFilename="https link", data=None),
+            FakeObjAttachment(longFilename="ok.txt", data=b"ok"),
+        ]))
+    assert parsed.embedded_files == [("ok.txt", b"ok")]
+    assert parsed.not_embedded == ["broken.msg", "https link"]
+    assert "broken.msg" in caplog.text and "https link" in caplog.text
+
+
+def test_render_html_marks_attachments_that_were_not_embedded():
+    out = render_html(ParsedEmail(
+        attachments=["ok.txt", "broken.msg"],
+        not_embedded=["broken.msg"],
+        attachments_embedded=True,
+    ))
+    assert "<li>ok.txt</li>" in out
+    assert "<li>broken.msg <em>(not embedded" in out
+
+
+# --------------------------- HTML head styles / declared charset ---------------------------
+
+
+def test_parse_honours_meta_charset_for_html_body():
+    text = "会議の議事録"
+    html = f'<html><head><meta charset="shift_jis"></head><body><p>{text}</p></body></html>'
+    parsed = parse_message(FakeMessage(htmlBody=html.encode("shift_jis")))
+    assert text in parsed.html_body
+
+
+def test_parse_honours_http_equiv_charset_for_html_body():
+    text = "Привет, мир"
+    html = (
+        '<html><head><meta http-equiv="Content-Type" content="text/html; charset=koi8-r">'
+        f"</head><body>{text}</body></html>"
+    )
+    parsed = parse_message(FakeMessage(htmlBody=html.encode("koi8-r")))
+    assert text in parsed.html_body
+
+
+def test_parse_ignores_unknown_or_wrong_declared_charset():
+    html = '<meta charset="no-such-codec"><p>caf\xe9</p>'
+    parsed = parse_message(FakeMessage(htmlBody=html.encode("cp1252")))
+    assert "café" in parsed.html_body
+    # Declared utf-8 but actually cp1252: fall back rather than mojibake/raise.
+    raw = b'<meta charset="utf-8"><p>\x93hi\x94</p>'
+    parsed = parse_message(FakeMessage(htmlBody=raw))
+    assert "“hi”" in parsed.html_body
+
+
+def test_render_html_keeps_email_head_styles():
+    html = (
+        "<html><head><style>.promo { color: #c00; }</style>"
+        '<style type="text/css"><!-- p.MsoNormal { margin: 0; } --></style>'
+        '</head><body><p class="promo">Sale</p></body></html>'
+    )
+    out = render_html(ParsedEmail(html_body=html))
+    head = out.split("<body>", 1)[0]
+    assert ".promo { color: #c00; }" in head
+    assert "p.MsoNormal { margin: 0; }" in head
+    # The body content is still extracted once.
+    assert out.count('<p class="promo">Sale</p>') == 1
+
+
+def test_render_html_email_styles_precede_header_css():
+    # Our header/meta styling is declared last so equal-specificity email
+    # rules (e.g. a bare ``h1``) can't restyle the generated header.
+    html = "<html><head><style>h1 { font-size: 40pt; }</style></head><body>x</body></html>"
+    out = render_html(ParsedEmail(html_body=html))
+    assert out.index("h1 { font-size: 40pt; }") < out.index(".meta h1")
+

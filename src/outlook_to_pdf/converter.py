@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import os
 import re
 import sys
@@ -8,6 +9,8 @@ from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+_log = logging.getLogger(__name__)
 
 
 def _ensure_macos_native_libs() -> None:
@@ -62,6 +65,9 @@ class ParsedEmail:
     embedded_files: list[tuple[str, bytes]] = field(default_factory=list)
     # CID -> (bytes, mime, original_name) for inline-image resolution + sidecar.
     inline_resources: dict[str, tuple[bytes, str, str]] = field(default_factory=dict)
+    # Visible attachment names whose content could not be read (web links,
+    # broken attached messages) — listed, but neither embedded nor extracted.
+    not_embedded: list[str] = field(default_factory=list)
     attachments_embedded: bool = False
 
 
@@ -69,14 +75,37 @@ def _coerce_str(value: object) -> str | None:
     if value is None:
         return None
     if isinstance(value, bytes):
-        for enc in ("utf-8", "cp1252", "latin-1"):
+        for enc in ("utf-8", "cp1252"):
             try:
                 return value.decode(enc)
             except UnicodeDecodeError:
                 continue
-        return value.decode("utf-8", errors="replace")
+        # latin-1 maps every byte, so it is the terminal fallback.
+        return value.decode("latin-1")
     s = str(value).strip()
     return s or None
+
+
+# <meta charset="x"> or <meta http-equiv="Content-Type" content="...; charset=x">
+_META_CHARSET_RE = re.compile(rb"""<meta\b[^>]*?charset\s*=\s*["']?\s*([A-Za-z0-9._:-]+)""", re.IGNORECASE)
+
+
+def _decode_html(value: object) -> str | None:
+    """Decode an HTML body, honouring its declared ``<meta>`` charset.
+
+    Falls back to :func:`_coerce_str`'s utf-8 / cp1252 / latin-1 chain when
+    no charset is declared, the codec is unknown, or the bytes don't match it.
+    """
+    if isinstance(value, (bytearray, memoryview)):
+        value = bytes(value)
+    if isinstance(value, bytes):
+        m = _META_CHARSET_RE.search(value[:4096])
+        if m:
+            try:
+                return value.decode(m.group(1).decode("ascii"))
+            except (LookupError, UnicodeDecodeError):
+                pass
+    return _coerce_str(value)
 
 
 def _format_date(value: object) -> str | None:
@@ -107,6 +136,26 @@ def _normalize_cid(value: object) -> str | None:
     return s.strip("<>").strip() or None
 
 
+def _attachment_bytes(raw_data: object) -> bytes | None:
+    """Bytes for an attachment's ``.data``, or None if it has no content.
+
+    An attached email (extract_msg ``EmbeddedMsgAttachment``) exposes a parsed
+    Message rather than bytes; serialise it back to a standalone .msg.
+    """
+    if isinstance(raw_data, (bytes, bytearray, memoryview)):
+        return bytes(raw_data)
+    export = getattr(raw_data, "exportBytes", None)
+    if callable(export):
+        for allow_bad in (False, True):
+            try:
+                out = export(allowBadEmbed=allow_bad)
+            except Exception:  # noqa: BLE001 — any failure means "try harder / give up"
+                continue
+            if isinstance(out, (bytes, bytearray, memoryview)):
+                return bytes(out)
+    return None
+
+
 def parse_message(msg: _MessageLike) -> ParsedEmail:
     """Read a Message-like object into a ParsedEmail.
 
@@ -115,30 +164,40 @@ def parse_message(msg: _MessageLike) -> ParsedEmail:
       - ``embedded_files`` — (name, bytes) for PDF /EmbeddedFiles
       - ``inline_resources`` — CID -> (bytes, mime, name) for cid: URL resolution
     """
-    html_body = _coerce_str(msg.htmlBody) if msg.htmlBody else None
-    haystack = html_body or ""
+    html_body = _decode_html(msg.htmlBody) if msg.htmlBody else None
+    # Lower-cased: the cid: url fetcher matches case-insensitively, so the
+    # "purely inline?" check must agree with it.
+    haystack = (html_body or "").lower()
 
     attachments: list[str] = []
     embedded: list[tuple[str, bytes]] = []
     inline: dict[str, tuple[bytes, str, str]] = {}
+    not_embedded: list[str] = []
 
     for att in (msg.attachments or []):
         name = _attachment_name(att)
         cid = _normalize_cid(getattr(att, "cid", None) or getattr(att, "contentId", None))
         mime = _coerce_str(getattr(att, "mimetype", None)) or "application/octet-stream"
         raw_data = getattr(att, "data", None)
-        raw = bytes(raw_data) if isinstance(raw_data, (bytes, bytearray, memoryview)) else None
+        raw = _attachment_bytes(raw_data)
+        if raw is not None and not isinstance(raw_data, (bytes, bytearray, memoryview)):
+            # Attached message serialised to .msg — make the name say so.
+            if not name.lower().endswith(".msg"):
+                name = f"{name}.msg"
 
         if cid and raw is not None:
             inline[cid] = (raw, mime, name)
 
         # Purely inline images live in inline_resources only — no double-listing.
-        if cid and f"cid:{cid}" in haystack:
+        if cid and f"cid:{cid.lower()}" in haystack:
             continue
 
         attachments.append(name)
         if raw is not None:
             embedded.append((name, raw))
+        else:
+            not_embedded.append(name)
+            _log.warning("attachment %r has no readable content; it is listed but not embedded", name)
 
     return ParsedEmail(
         subject=_coerce_str(msg.subject) or "(no subject)",
@@ -152,15 +211,30 @@ def parse_message(msg: _MessageLike) -> ParsedEmail:
         attachments=attachments,
         embedded_files=embedded,
         inline_resources=inline,
+        not_embedded=not_embedded,
     )
 
 
 _HTML_BODY_RE = re.compile(r"<body\b[^>]*>(.*?)</body>", re.IGNORECASE | re.DOTALL)
 
 
+_HTML_BODY_OPEN_RE = re.compile(r"<body\b", re.IGNORECASE)
+_STYLE_RE = re.compile(r"<style\b[^>]*>(.*?)</style\s*>", re.IGNORECASE | re.DOTALL)
+
+
 def _extract_body_inner(html: str) -> str:
     m = _HTML_BODY_RE.search(html)
     return m.group(1) if m else html
+
+
+def _extract_head_styles(html: str) -> list[str]:
+    """CSS from ``<style>`` blocks before ``<body>`` — where Outlook and most
+    marketing mail keep their layout CSS. Styles inside the body survive body
+    extraction on their own."""
+    m = _HTML_BODY_OPEN_RE.search(html)
+    if not m:
+        return []
+    return [css for css in _STYLE_RE.findall(html[: m.start()]) if css.strip()]
 
 
 def _text_to_html(text: str) -> str:
@@ -201,14 +275,22 @@ def render_html(parsed: ParsedEmail) -> str:
     add("Bcc", parsed.bcc)
     add("Date", parsed.date_display)
 
+    email_css: list[str] = []
     if parsed.html_body:
         body_html = _extract_body_inner(parsed.html_body)
+        email_css = _extract_head_styles(parsed.html_body)
     else:
         body_html = _text_to_html(parsed.text_body)
 
     attachments_html = ""
     if parsed.attachments:
-        items = "\n".join(f"    <li>{escape(name)}</li>" for name in parsed.attachments)
+        missing = set(parsed.not_embedded)
+
+        def item(name: str) -> str:
+            flag = " <em>(not embedded &mdash; no readable content)</em>" if name in missing else ""
+            return f"    <li>{escape(name)}{flag}</li>"
+
+        items = "\n".join(item(name) for name in parsed.attachments)
         note = (
             " &mdash; embedded in this PDF; open the attachments panel in your "
             "PDF viewer (Preview sidebar, Acrobat paperclip) to save them out"
@@ -226,7 +308,9 @@ def render_html(parsed: ParsedEmail) -> str:
         "<!DOCTYPE html>\n"
         '<html><head><meta charset="utf-8">\n'
         f"<title>{escape(parsed.subject)}</title>\n"
-        f"<style>{_HEADER_CSS}</style>\n"
+        # Email CSS first so our header styling wins on equal specificity.
+        + "".join(f"<style>{css}</style>\n" for css in email_css)
+        + f"<style>{_HEADER_CSS}</style>\n"
         "</head><body>\n"
         '<header class="meta">\n'
         f"  <h1>{escape(parsed.subject)}</h1>\n"
@@ -344,6 +428,25 @@ def render_pdf(
 
 _UNSAFE_FILENAME_RE = re.compile(r"[\x00-\x1f/\\:]")
 
+# Most filesystems cap a name at 255 bytes; stay well under so the collision
+# suffix (``_12``) still fits.
+_MAX_FILENAME_BYTES = 200
+_MAX_EXT_BYTES = 20
+
+
+def _truncate_utf8(text: str, limit: int) -> str:
+    return text.encode("utf-8")[:limit].decode("utf-8", errors="ignore")
+
+
+def _truncate_filename(name: str) -> str:
+    if len(name.encode("utf-8")) <= _MAX_FILENAME_BYTES:
+        return name
+    stem, dot, ext = name.rpartition(".")
+    if not dot or not stem or len(ext.encode("utf-8")) > _MAX_EXT_BYTES:
+        return _truncate_utf8(name, _MAX_FILENAME_BYTES)
+    suffix = "." + ext
+    return _truncate_utf8(stem, _MAX_FILENAME_BYTES - len(suffix.encode("utf-8"))) + suffix
+
 
 def _sanitize_filename(name: str) -> str:
     """Reduce ``name`` to a safe basename suitable for writing to disk.
@@ -351,13 +454,15 @@ def _sanitize_filename(name: str) -> str:
     Strips directory components, control chars, and platform-specific path
     separators / drive-letter colons. The attachment filenames in a .msg are
     attacker-controlled, so this guards the sidecar extraction path against
-    traversal (`../../etc/passwd`) and NUL-byte tricks.
+    traversal (`../../etc/passwd`) and NUL-byte tricks, and truncates
+    over-long names (keeping the extension) so ``write_bytes`` can't fail
+    with ENAMETOOLONG.
     """
     # Normalize Windows separators on non-Windows hosts so we still split.
     normalized = name.replace("\\", "/")
     base = os.path.basename(normalized).strip().lstrip(".")
     safe = _UNSAFE_FILENAME_RE.sub("_", base)
-    return safe or "attachment.bin"
+    return _truncate_filename(safe) if safe else "attachment.bin"
 
 
 def _extract_attachments_to_disk(parsed: ParsedEmail, target: str | Path) -> None:
@@ -376,9 +481,15 @@ def _extract_attachments_to_disk(parsed: ParsedEmail, target: str | Path) -> Non
         used.add(candidate)
         (target / candidate).write_bytes(data)
 
+    written: set[tuple[str, bytes]] = set()
     for name, data in parsed.embedded_files:
         _write(name, data)
+        written.add((name, data))
     for _cid, (data, _mime, name) in parsed.inline_resources.items():
+        # A CID attachment the body never references is also a visible
+        # embedded file — it was already written above.
+        if (name, data) in written:
+            continue
         _write(name, data)
 
 
@@ -398,10 +509,9 @@ def convert_msg_to_pdf(
     with extract_msg.openMsg(str(msg_path)) as msg:
         parsed = parse_message(msg)
 
-    if extract_attachments_to is not None:
-        _extract_attachments_to_disk(parsed, extract_attachments_to)
-
-    return render_pdf(
+    # Render first: a sidecar write failure (odd attachment name, full disk)
+    # must not cost the user the PDF itself.
+    result = render_pdf(
         parsed,
         pdf_path,
         # No base_url: relative hrefs in the body must not resolve to files
@@ -410,3 +520,8 @@ def convert_msg_to_pdf(
         embed_attachments=embed_attachments,
         allow_network=allow_network,
     )
+
+    if extract_attachments_to is not None:
+        _extract_attachments_to_disk(parsed, extract_attachments_to)
+
+    return result
