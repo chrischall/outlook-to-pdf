@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.13](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.12...v0.1.13) (2026-10-27)
+
+
+### Bug Fixes
+
+* **deps:** bump brotli from 1.2.0 to 1.2.1 in the security group across 1 directory ([#75](https://github.com/chrischall/outlook-to-pdf/issues/75)) ([19693c6](https://github.com/chrischall/outlook-to-pdf/commit/19693c60c2d4ae4f30d2c6da8e29899a30c2afc0))
+* **deps:** bump pillow from 12.3.0 to 13.0.0 in the security group across 1 directory ([#70](https://github.com/chrischall/outlook-to-pdf/issues/70)) ([cb6198d](https://github.com/chrischall/outlook-to-pdf/commit/cb6198d483ea82953f0149e88c0dfb0218b6a266))
+
 ## [0.1.12](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.11...v0.1.12) (2026-10-09)
 
 
