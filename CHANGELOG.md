@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.14](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.13...v0.1.14) (2026-11-03)
+
+
+### Bug Fixes
+
+* **deps:** bump brotlicffi from 1.2.0.1 to 1.2.1.0 in the security group across 1 directory ([#79](https://github.com/chrischall/outlook-to-pdf/issues/79)) ([3d1c160](https://github.com/chrischall/outlook-to-pdf/commit/3d1c16092e148d1caa6763ea3e78d79d87db5f2e))
+* **deps:** bump the uv-dependencies group with 3 updates ([#77](https://github.com/chrischall/outlook-to-pdf/issues/77)) ([f29b56a](https://github.com/chrischall/outlook-to-pdf/commit/f29b56af4b40a9aa057f2d1c770a4f30f9627ccd))
+
 ## [0.1.13](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.12...v0.1.13) (2026-10-27)
 
 
