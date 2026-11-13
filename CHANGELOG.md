@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.15](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.14...v0.1.15) (2026-11-13)
+
+
+### Bug Fixes
+
+* **deps:** bump soupsieve from 2.9 to 4.0 in the security group across 1 directory ([#83](https://github.com/chrischall/outlook-to-pdf/issues/83)) ([ab4e1ba](https://github.com/chrischall/outlook-to-pdf/commit/ab4e1ba33eac18bebae55c7ff6583a0b46c6baac))
+* **deps:** bump the uv-dependencies group with 2 updates ([#80](https://github.com/chrischall/outlook-to-pdf/issues/80)) ([10a8c77](https://github.com/chrischall/outlook-to-pdf/commit/10a8c77accafd97e64d62048e829364ab34395e0))
+
 ## [0.1.14](https://github.com/chrischall/outlook-to-pdf/compare/v0.1.13...v0.1.14) (2026-11-03)
 
 
